@@ -9,10 +9,11 @@ Anima uses an LLM as its text encoder. When multiple artist tags are stacked in 
 
 The bundled `AnimaArtistPack` node provides a one-shot experience: write your artist list (separated by commas or newlines) in one text box, your main prompt in another, and the node handles splitting, encoding, and packaging automatically.
 
+The current release (v24) adds layered cross-seed stabilizers, CFG-style strength extrapolation, and a new linear injection-layer weight syntax `::name::weight`.
+
 ## Quick links
 
-- [Full documentation](docs/USAGE.md) — usage, parameters, modes, performance tips
-- [Optimization notes](OPTIMIZATION_NOTES.md) — technical roadmap for contributors
+- [Full documentation](docs/USAGE.md) — usage, parameters, modes, stabilizers, performance tips
 - [Issues](../../issues) — bug reports, feature requests
 - [Discussions](../../discussions) — usage questions, results sharing
 
@@ -58,30 +59,59 @@ For full parameter explanations and recommended combinations, see [docs/USAGE.md
 ```
 combine_mode = output_avg
 fusion_mode  = interpolate
-strength     = 0.6 ~ 0.8
+strength     = 1.0
 ```
 
-To weight individual artists, use CLIP weighting syntax inside the artist chain:
+To weight individual artists within the chain, use either of two syntaxes (they can coexist and stack):
 
 ```
-wlop, (sakimichan:1.2), (krenz:0.7)
+wlop, ::sakimichan::1.2, (krenz:0.7)
 ```
+
+- `(name:1.2)` — CLIP-side weighting (same as SD/A1111), non-linear, applied at text encoding
+- `::name::1.2` — injection-side weighting (v24), linear and predictable, applied at cross-attention output
+
+## Cross-seed stability
+
+In multi-artist setups, the same prompt with different seeds tends to produce noticeably different style mixes — sometimes one artist dominates, other times another, even at equal weights. This is structural to how cross-attention interacts with seed-driven hidden state.
+
+v24 provides four optional stabilizers via `AnimaArtistOptions`, ordered from light to heavy:
+
+| Stabilizer | Strength | Notes |
+|---|---|---|
+| `artist_ema_alpha` | light | Temporal EMA across sampling steps |
+| `combine_mode = lowrank_avg` + `lowrank_k` | medium | SVD low-rank constraint on multi-artist deltas |
+| `artist_static_capture` + `static_capture_k` | heavy | Freeze artist attention after K warmup steps (also a 30-50% speedup) |
+| `artist_anchor_q` | heaviest | Replace user-seed Q with a fixed-seed anchor's Q (near-full cross-seed decoupling) |
+
+All are off by default. Recommended progression: start with EMA, escalate as needed. See [docs/USAGE.md](docs/USAGE.md) for detailed mechanics and tuning.
+
+## Style amplification
+
+`strength` accepts values in `[0, 4]`:
+
+- `0 ~ 1` — interpolation between base and artist (`strength=1` = pure artist replacement)
+- `1 ~ 4` — CFG-style extrapolation: `out = base + strength * (artist - base)`, amplifying the artist's deviation from base for stronger style
+
+`1.5 ~ 2.5` is a common range for "stronger style without breaking content"; pushing past `3` tends to oversaturate.
 
 ## Performance notes
 
 Generation time scales with artist count. Per the math of `output_avg`, each layer runs `N + 1` cross-attention forwards (N artists + base). Approximate measured cost (varies by GPU):
 
-| Artist count | Relative time |
+| Configuration | Relative time |
 |---|---|
-| 1 | 1.0x |
-| 4 | ~1.4x |
-| 8 | ~1.7x |
+| 1 artist | 1.0x |
+| 4 artists | ~1.4x |
+| 8 artists | ~1.7x |
+| 5 artists + `artist_static_capture` (K=6) | ~1.1x |
+| 5 artists + `artist_anchor_q` (cached) | ~1.05x |
 
-**Strongly recommended**: connect `AnimaArtistOptions` and limit either the layer range (`start_block / end_block`) or the sampling-step range (`start_percent / end_percent`). Both can dramatically reduce generation time with minimal quality loss. See the docs for details.
+**Strongly recommended**: connect `AnimaArtistOptions` and limit either the layer range (`start_block / end_block`) or the sampling-step range (`start_percent / end_percent`). Both can dramatically reduce generation time with minimal quality loss, and stack with the cache-based stabilizers above. See the docs for details.
 
 ## Important caveat
 
-This node **cannot achieve the near-lossless artist mixing that SDXL does**. Anima's text encoder is non-linear, so any mixing strategy introduces some distortion. What this node does is make that distortion controllable. Style-similar artists mix well; style-divergent artists may "regress to the mean" into a compromise look.
+This node **cannot achieve the near-lossless artist mixing that SDXL does**. Anima's text encoder is non-linear, so any mixing strategy introduces some distortion. What this node does is make that distortion controllable. Style-similar artists mix well; style-divergent artists may "regress to the mean" into a compromise look — `lowrank_avg` accepts more of this regression in exchange for cross-seed stability.
 
 ## Acknowledgements
 
