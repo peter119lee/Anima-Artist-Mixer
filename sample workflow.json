@@ -1,79 +1,9 @@
 {
   "id": "0a1d14fb-5e7d-4982-b58d-3e2ebbbed0f0",
   "revision": 0,
-  "last_node_id": 79,
-  "last_link_id": 179,
+  "last_node_id": 88,
+  "last_link_id": 217,
   "nodes": [
-    {
-      "id": 8,
-      "type": "UNETLoader",
-      "pos": [
-        958.7269529611992,
-        714.522756505489
-      ],
-      "size": [
-        307.5999755859375,
-        82
-      ],
-      "flags": {},
-      "order": 0,
-      "mode": 0,
-      "inputs": [],
-      "outputs": [
-        {
-          "name": "MODEL",
-          "type": "MODEL",
-          "links": [
-            173
-          ]
-        }
-      ],
-      "properties": {
-        "cnr_id": "comfy-core",
-        "ver": "0.11.0",
-        "Node name for S&R": "UNETLoader"
-      },
-      "widgets_values": [
-        "anima_baseV10.safetensors",
-        "default"
-      ]
-    },
-    {
-      "id": 4,
-      "type": "CLIPLoader",
-      "pos": [
-        973.3004698919146,
-        861.4717301100203
-      ],
-      "size": [
-        270,
-        106
-      ],
-      "flags": {},
-      "order": 1,
-      "mode": 0,
-      "inputs": [],
-      "outputs": [
-        {
-          "name": "CLIP",
-          "type": "CLIP",
-          "links": [
-            176,
-            179
-          ]
-        }
-      ],
-      "properties": {
-        "cnr_id": "comfy-core",
-        "ver": "0.11.0",
-        "Node name for S&R": "CLIPLoader"
-      },
-      "widgets_values": [
-        "qwen_3_06b_base.safetensors",
-        "stable_diffusion",
-        "default"
-      ]
-    },
     {
       "id": 1,
       "type": "VAELoader",
@@ -86,7 +16,7 @@
         58
       ],
       "flags": {},
-      "order": 2,
+      "order": 0,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -108,6 +38,258 @@
       ]
     },
     {
+      "id": 7,
+      "type": "VAEDecode",
+      "pos": [
+        2496.892403135036,
+        718.0479801791682
+      ],
+      "size": [
+        210.37067246591369,
+        48.22396692539701
+      ],
+      "flags": {},
+      "order": 11,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "samples",
+          "type": "LATENT",
+          "link": 39
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 5
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "slot_index": 0,
+          "links": [
+            182
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.40",
+        "Node name for S&R": "VAEDecode"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 81,
+      "type": "RTXVideoSuperResolution",
+      "pos": [
+        2817.7879281248233,
+        673.7492273731003
+      ],
+      "size": [
+        285.81015625,
+        106
+      ],
+      "flags": {},
+      "order": 12,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 182
+        }
+      ],
+      "outputs": [
+        {
+          "name": "upscaled_images",
+          "type": "IMAGE",
+          "links": [
+            183
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfyui_nvidia_rtx_nodes",
+        "ver": "892515e3eb9a4920a131a502a047e47adca9eb0d",
+        "Node name for S&R": "RTXVideoSuperResolution"
+      },
+      "widgets_values": [
+        "scale by multiplier",
+        1.5,
+        "ULTRA"
+      ]
+    },
+    {
+      "id": 46,
+      "type": "SaveImage",
+      "pos": [
+        3204.3601503384193,
+        660.5728355330601
+      ],
+      "size": [
+        628.3398654819198,
+        474.99263644890596
+      ],
+      "flags": {},
+      "order": 13,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 183
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.20.1",
+        "Node name for S&R": "SaveImage"
+      },
+      "widgets_values": [
+        "ComfyUI"
+      ]
+    },
+    {
+      "id": 83,
+      "type": "LoraLoader",
+      "pos": [
+        575.9791301204198,
+        690.1853473994228
+      ],
+      "size": [
+        270,
+        126
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 189
+        },
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 190
+        }
+      ],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            204
+          ]
+        },
+        {
+          "name": "CLIP",
+          "type": "CLIP",
+          "links": [
+            205
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.21.1",
+        "Node name for S&R": "LoraLoader"
+      },
+      "widgets_values": [
+        "anima_context_detailer_base10.safetensors",
+        0.3,
+        0.3
+      ]
+    },
+    {
+      "id": 82,
+      "type": "LoraLoader",
+      "pos": [
+        911.9052789280757,
+        635.713930734618
+      ],
+      "size": [
+        270,
+        126
+      ],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 204
+        },
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 205
+        }
+      ],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": []
+        },
+        {
+          "name": "CLIP",
+          "type": "CLIP",
+          "links": []
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.21.1",
+        "Node name for S&R": "LoraLoader"
+      },
+      "widgets_values": [
+        "lighting_base10-000100.safetensors",
+        0.4,
+        0.4
+      ]
+    },
+    {
+      "id": 19,
+      "type": "EmptyLatentImage",
+      "pos": [
+        1837.622905161346,
+        936.5580522024068
+      ],
+      "size": [
+        270,
+        106
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [
+            40
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.40",
+        "Node name for S&R": "EmptyLatentImage"
+      },
+      "widgets_values": [
+        824,
+        1072,
+        1
+      ]
+    },
+    {
       "id": 6,
       "type": "CLIPTextEncode",
       "pos": [
@@ -121,13 +303,13 @@
       "flags": {
         "collapsed": false
       },
-      "order": 5,
+      "order": 7,
       "mode": 0,
       "inputs": [
         {
           "name": "clip",
           "type": "CLIP",
-          "link": 176
+          "link": 214
         }
       ],
       "outputs": [
@@ -146,19 +328,91 @@
         "Node name for S&R": "CLIPTextEncode"
       },
       "widgets_values": [
-        "worst quality, low quality, score_1, score_2, score_3, blurry, jpeg artifacts, sepia,"
+        "bad hand,extra toes,fat thighs,thick thighs,low resolution,worst quality, low quality,lowres,jpeg,  bad composition, "
+      ]
+    },
+    {
+      "id": 8,
+      "type": "UNETLoader",
+      "pos": [
+        177.0163395407595,
+        654.3498195650126
+      ],
+      "size": [
+        307.5999755859375,
+        82
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            189,
+            212
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.11.0",
+        "Node name for S&R": "UNETLoader"
+      },
+      "widgets_values": [
+        "anima-base-v1.0.safetensors",
+        "default"
+      ]
+    },
+    {
+      "id": 4,
+      "type": "CLIPLoader",
+      "pos": [
+        186.7545018606725,
+        781.2412295018056
+      ],
+      "size": [
+        270,
+        106
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "CLIP",
+          "type": "CLIP",
+          "links": [
+            190,
+            213,
+            214
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.11.0",
+        "Node name for S&R": "CLIPLoader"
+      },
+      "widgets_values": [
+        "qwen_3_06b_base.safetensors",
+        "stable_diffusion",
+        "default"
       ]
     },
     {
       "id": 78,
       "type": "AnimaArtistPack",
       "pos": [
-        1397.3580523866947,
-        673.5484830328068
+        1375.867706674851,
+        371.4629103346162
       ],
       "size": [
-        400,
-        200
+        435.1659976719732,
+        500.21335464394906
       ],
       "flags": {},
       "order": 6,
@@ -167,7 +421,7 @@
         {
           "name": "clip",
           "type": "CLIP",
-          "link": 179
+          "link": 213
         }
       ],
       "outputs": [
@@ -175,7 +429,7 @@
           "name": "artist_pack",
           "type": "ANIMA_PACK",
           "links": [
-            162
+            208
           ]
         }
       ],
@@ -183,67 +437,8 @@
         "Node name for S&R": "AnimaArtistPack"
       },
       "widgets_values": [
-        "((@ningen mame))\n(@mignon)\n(@ciloranko)\n(((@uof)))",
-        "masterpiece, best quality, absurdres, newest, very aesthetic, amazing quality, highres, sensitive, ultra detailed, best anatomy, HDR, 8K, awesome, inspiring, cinematic composition, anime coloring\n\nmasterpiece, best quality. Texas from Arknights is taking a bath, sitting in a bathtub. She looks tired, with a towel draped over her face. Her head is tilted back, and she is stretching her posture in a relaxed manner."
-      ]
-    },
-    {
-      "id": 79,
-      "type": "AnimaArtistCrossAttn",
-      "pos": [
-        1830.7812000827178,
-        642.8819473402127
-      ],
-      "size": [
-        304.0279296875,
-        218
-      ],
-      "flags": {},
-      "order": 7,
-      "mode": 0,
-      "inputs": [
-        {
-          "name": "model",
-          "type": "MODEL",
-          "link": 173
-        },
-        {
-          "name": "artist_pack",
-          "type": "ANIMA_PACK",
-          "link": 162
-        },
-        {
-          "name": "advanced_options",
-          "shape": 7,
-          "type": "ANIMA_OPTS",
-          "link": 166
-        }
-      ],
-      "outputs": [
-        {
-          "name": "model",
-          "type": "MODEL",
-          "links": [
-            164
-          ]
-        },
-        {
-          "name": "base_prompt",
-          "type": "CONDITIONING",
-          "links": [
-            160
-          ]
-        }
-      ],
-      "properties": {
-        "Node name for S&R": "AnimaArtistCrossAttn"
-      },
-      "widgets_values": [
-        "output_avg",
-        "interpolate",
-        1,
-        true,
-        false
+        "::@uof::2,@kieed,@ciloranko,@huanxiang_heitu,@yyb",
+        "masterpiece, best quality, High Resolution,Esthetic,Excellent,newest,incredibly absurdres,very aesthetic,high detailed,\nyear 2024,year 2025,\n1girl,surtr (arknights), red hair, purple eyes, demon horns, eyewear on head, black bikini, bracelet, jewelry, looking at viewer,\nupper body,"
       ]
     },
     {
@@ -255,21 +450,21 @@
       ],
       "size": [
         286.3216050917681,
-        278.97529301901045
+        474
       ],
       "flags": {},
-      "order": 8,
+      "order": 10,
       "mode": 0,
       "inputs": [
         {
           "name": "model",
           "type": "MODEL",
-          "link": 164
+          "link": 217
         },
         {
           "name": "positive",
           "type": "CONDITIONING",
-          "link": 160
+          "link": 211
         },
         {
           "name": "negative",
@@ -298,135 +493,25 @@
         "Node name for S&R": "KSampler"
       },
       "widgets_values": [
-        95194885463737,
-        "fixed",
+        1078925437746991,
+        "randomize",
         32,
-        4.6,
-        "dpmpp_2m_sde_gpu",
-        "simple",
+        5,
+        "er_sde",
+        "beta",
         1
       ]
     },
     {
-      "id": 7,
-      "type": "VAEDecode",
-      "pos": [
-        2496.892403135036,
-        718.0479801791682
-      ],
-      "size": [
-        210.37067246591369,
-        48.22396692539701
-      ],
-      "flags": {},
-      "order": 9,
-      "mode": 0,
-      "inputs": [
-        {
-          "name": "samples",
-          "type": "LATENT",
-          "link": 39
-        },
-        {
-          "name": "vae",
-          "type": "VAE",
-          "link": 5
-        }
-      ],
-      "outputs": [
-        {
-          "name": "IMAGE",
-          "type": "IMAGE",
-          "slot_index": 0,
-          "links": [
-            90
-          ]
-        }
-      ],
-      "properties": {
-        "cnr_id": "comfy-core",
-        "ver": "0.3.40",
-        "Node name for S&R": "VAEDecode"
-      },
-      "widgets_values": []
-    },
-    {
-      "id": 46,
-      "type": "SaveImage",
-      "pos": [
-        2789.88335124604,
-        540.0121436519753
-      ],
-      "size": [
-        628.3398654819198,
-        474.99263644890596
-      ],
-      "flags": {},
-      "order": 10,
-      "mode": 0,
-      "inputs": [
-        {
-          "name": "images",
-          "type": "IMAGE",
-          "link": 90
-        }
-      ],
-      "outputs": [],
-      "properties": {
-        "cnr_id": "comfy-core",
-        "ver": "0.20.1",
-        "Node name for S&R": "SaveImage"
-      },
-      "widgets_values": [
-        "ComfyUI"
-      ]
-    },
-    {
-      "id": 75,
+      "id": 88,
       "type": "AnimaArtistOptions",
       "pos": [
-        1444.1936079561149,
-        1235.7731347222298
+        1404.1825957184926,
+        1126.0328667317556
       ],
       "size": [
         316.7291015625,
-        178
-      ],
-      "flags": {},
-      "order": 3,
-      "mode": 4,
-      "inputs": [],
-      "outputs": [
-        {
-          "name": "advanced_options",
-          "type": "ANIMA_OPTS",
-          "links": [
-            166
-          ]
-        }
-      ],
-      "properties": {
-        "Node name for S&R": "AnimaArtistOptions"
-      },
-      "widgets_values": [
-        63,
-        -1,
-        0,
-        1,
-        true,
-        ""
-      ]
-    },
-    {
-      "id": 19,
-      "type": "EmptyLatentImage",
-      "pos": [
-        982.114484193543,
-        536.1073469867009
-      ],
-      "size": [
-        270,
-        106
+        370
       ],
       "flags": {},
       "order": 4,
@@ -434,22 +519,90 @@
       "inputs": [],
       "outputs": [
         {
-          "name": "LATENT",
-          "type": "LATENT",
+          "name": "advanced_options",
+          "type": "ANIMA_OPTS",
           "links": [
-            40
+            207
           ]
         }
       ],
       "properties": {
-        "cnr_id": "comfy-core",
-        "ver": "0.3.40",
-        "Node name for S&R": "EmptyLatentImage"
+        "Node name for S&R": "AnimaArtistOptions"
       },
       "widgets_values": [
-        1216,
-        832,
-        1
+        0,
+        14,
+        0,
+        1,
+        true,
+        0,
+        1,
+        false,
+        6,
+        true,
+        2,
+        0.3,
+        14,
+        ""
+      ]
+    },
+    {
+      "id": 87,
+      "type": "AnimaArtistCrossAttn",
+      "pos": [
+        1843.218968732128,
+        588.2073084759128
+      ],
+      "size": [
+        291.55234375,
+        194
+      ],
+      "flags": {},
+      "order": 9,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 212
+        },
+        {
+          "name": "artist_pack",
+          "type": "ANIMA_PACK",
+          "link": 208
+        },
+        {
+          "name": "advanced_options",
+          "shape": 7,
+          "type": "ANIMA_OPTS",
+          "link": 207
+        }
+      ],
+      "outputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "links": [
+            217
+          ]
+        },
+        {
+          "name": "base_prompt",
+          "type": "CONDITIONING",
+          "links": [
+            211
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "AnimaArtistCrossAttn"
+      },
+      "widgets_values": [
+        "output_avg",
+        "interpolate",
+        1,
+        true,
+        false
       ]
     }
   ],
@@ -487,55 +640,95 @@
       "LATENT"
     ],
     [
-      90,
+      182,
       7,
+      0,
+      81,
+      0,
+      "IMAGE"
+    ],
+    [
+      183,
+      81,
       0,
       46,
       0,
       "IMAGE"
     ],
     [
-      160,
-      79,
+      189,
+      8,
+      0,
+      83,
+      0,
+      "MODEL"
+    ],
+    [
+      190,
+      4,
+      0,
+      83,
+      1,
+      "CLIP"
+    ],
+    [
+      204,
+      83,
+      0,
+      82,
+      0,
+      "MODEL"
+    ],
+    [
+      205,
+      83,
+      1,
+      82,
+      1,
+      "CLIP"
+    ],
+    [
+      207,
+      88,
+      0,
+      87,
+      2,
+      "ANIMA_OPTS"
+    ],
+    [
+      208,
+      78,
+      0,
+      87,
+      1,
+      "ANIMA_PACK"
+    ],
+    [
+      211,
+      87,
       1,
       18,
       1,
       "CONDITIONING"
     ],
     [
-      162,
-      78,
-      0,
-      79,
-      1,
-      "ANIMA_PACK"
-    ],
-    [
-      164,
-      79,
-      0,
-      18,
-      0,
-      "MODEL"
-    ],
-    [
-      166,
-      75,
-      0,
-      79,
-      2,
-      "ANIMA_OPTS"
-    ],
-    [
-      173,
+      212,
       8,
       0,
-      79,
+      87,
       0,
       "MODEL"
     ],
     [
-      176,
+      213,
+      4,
+      0,
+      78,
+      0,
+      "CLIP"
+    ],
+    [
+      214,
       4,
       0,
       6,
@@ -543,22 +736,22 @@
       "CLIP"
     ],
     [
-      179,
-      4,
+      217,
+      87,
       0,
-      78,
+      18,
       0,
-      "CLIP"
+      "MODEL"
     ]
   ],
   "groups": [],
   "config": {},
   "extra": {
     "ds": {
-      "scale": 0.6934334949441411,
+      "scale": 0.7390069383721929,
       "offset": [
-        -785.9116061011232,
-        -107.70962684208433
+        -1626.5611467764222,
+        -239.93252382215798
       ]
     },
     "qgn_navigation_groups": [],
