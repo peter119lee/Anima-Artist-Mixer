@@ -34,7 +34,7 @@ from .options import (
     format_bool,
     merge_runtime_options,
 )
-from .parsing import resolve_target_blocks_from_options
+from .parsing import resolve_target_blocks_from_options, split_artist_chain
 from .recipe import deserialize_recipe, serialize_recipe
 
 
@@ -528,7 +528,7 @@ class AnimaArtistStarter:
             f"status: {status}",
             f"recipe: {payload['preset']}",
             f"layout: {layout}",
-            f"artists: {len(chain.splitlines()) if chain else 0}",
+            f"artists: {len(split_artist_chain(chain))}",
             "",
             "wire:",
             "  - artist_chain -> AnimaArtistPack.artist_chain",
@@ -843,7 +843,7 @@ class AnimaArtistRecipeLoad:
             f"combine_mode: {payload['combine_mode']}",
             f"fusion_mode: {payload['fusion_mode']}",
             f"strength: {payload['strength']:.2f}",
-            f"artists: {len([ln for ln in payload['artist_chain'].splitlines() if ln.strip()])}",
+            f"artists: {len(split_artist_chain(payload['artist_chain']))}",
         ]
         if payload["notes"]:
             lines.extend(["", "notes:", f"  {payload['notes']}"])
