@@ -9,7 +9,6 @@ from .anchor import make_sigma_capture
 from .chain_tools import format_layer_span
 from .constants import (
     COMBINE_CHOICES,
-    COMBINE_EMBED_AVG,
     COMBINE_LOWRANK_AVG,
     COMBINE_OUTPUT_AVG,
     FUSION_BASE_PRESERVE,
@@ -292,10 +291,7 @@ class AnimaArtistCrossAttn:
                         "tooltip": (
                             "concat: concatenate artist tokens as K/V\n"
                             "output_avg: weighted average of per-artist attention outputs\n"
-                            "lowrank_avg: deterministic low-rank constraint on artist deltas\n"
-                            "embed_avg: average in LLMAdapter embedding space - fastest\n"
-                            "  (1 extra forward per layer regardless of artist count),\n"
-                            "  but mixes before attention so artists can blur together"
+                            "lowrank_avg: deterministic low-rank constraint on artist deltas"
                         ),
                     },
                 ),
@@ -405,12 +401,6 @@ class AnimaArtistCrossAttn:
                 "fusion=concat_with_base; anchor_q is disabled for this run."
             )
             adv["artist_anchor_q"] = False
-        if combine_mode == COMBINE_EMBED_AVG and artist_static_capture:
-            logger.info(
-                "[AnimaCrossAttn] embed_avg merges before attention; "
-                "static_capture applies to the merged pseudo-artist."
-            )
-
         labels = artist_pack.get("labels") or []
         layer_route_texts = artist_pack.get("layer_routes") or []
         timing_route_texts = artist_pack.get("timing_routes") or []

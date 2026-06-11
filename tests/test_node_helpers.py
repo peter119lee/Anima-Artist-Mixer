@@ -309,15 +309,19 @@ class InspectorTest(unittest.TestCase):
 
         self.assertIn("negative weights present", report)
 
-    def test_inspector_notes_embed_avg(self):
-        report = AnimaArtistInspector().inspect(
-            self._pack(), combine_mode=constants.COMBINE_EMBED_AVG,
-        )["result"][0]
-
-        self.assertIn("embed_avg mixes in the LLMAdapter embedding space", report)
-
-
 class RecipeTest(unittest.TestCase):
+    def test_legacy_embed_avg_recipe_falls_back_to_output_avg(self):
+        # embed_avg was cut before the v26 release (it averaged
+        # token-misaligned text embeddings and produced heavy artifacts).
+        # Recipes saved with it must degrade to output_avg with a warning,
+        # not crash.
+        text = recipe.serialize_recipe(
+            "wlop", constants.COMBINE_OUTPUT_AVG, constants.FUSION_INTERPOLATE, 1.0,
+        ).replace('"output_avg"', '"embed_avg"')
+        payload, warnings = recipe.deserialize_recipe(text)
+        self.assertEqual(payload["combine_mode"], constants.COMBINE_OUTPUT_AVG)
+        self.assertTrue(any("embed_avg" in w for w in warnings))
+
     def test_recipe_roundtrip(self):
         adv = options.base_advanced_options()
         adv["artist_ema_alpha"] = 0.25

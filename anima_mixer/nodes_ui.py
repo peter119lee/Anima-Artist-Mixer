@@ -10,7 +10,6 @@ from .constants import (
     CHAIN_LAYOUT_CHOICES,
     CHAIN_LAYOUT_LAYER_SCHEDULED,
     COMBINE_CHOICES,
-    COMBINE_EMBED_AVG,
     COMBINE_LOWRANK_AVG,
     COMBINE_OUTPUT_AVG,
     DEFAULT_NUM_BLOCKS,
@@ -712,12 +711,6 @@ class AnimaArtistInspector:
         if combine_mode == COMBINE_LOWRANK_AVG and len(labels) <= 1:
             warnings.append(
                 "lowrank_avg is meaningless with one artist; output_avg is used instead."
-            )
-        if combine_mode == COMBINE_EMBED_AVG:
-            notes.append(
-                "embed_avg mixes in the LLMAdapter embedding space: fastest mode "
-                "(one extra forward per layer), but artists mix before attention "
-                "and can blur together. Prefer output_avg for fidelity."
             )
         if any(str(route or "").strip() for route in layer_routes):
             warnings.append(

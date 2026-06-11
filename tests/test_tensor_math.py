@@ -175,36 +175,6 @@ class WrapperHelpersTest(unittest.TestCase):
         self.assertEqual(ws, [0.5, 0.5])
         self.assertAlmostEqual(comp, 0.0)
 
-    def test_merge_embeddings_normalized_average(self):
-        w = self._wrapper({"normalize_weights": True})
-        a = torch.zeros(1, 4, 8)
-        b = torch.ones(1, 4, 8)
-        ctx = torch.zeros(1, 4, 8)
-        merged = w._merge_embeddings([a, b], [1.0, 1.0], [1.0, 1.0], ctx)
-        self.assertTrue(torch.allclose(merged, torch.full_like(merged, 0.5)))
-
-    def test_merge_embeddings_respects_explicit_weights(self):
-        w = self._wrapper({"normalize_weights": False})
-        a = torch.ones(1, 4, 8)
-        ctx = torch.zeros(1, 4, 8)
-        merged = w._merge_embeddings([a], [2.0], [1.0], ctx)
-        self.assertTrue(torch.allclose(merged, torch.full_like(merged, 2.0)))
-
-    def test_merge_embeddings_fade_blends_toward_base_context(self):
-        w = self._wrapper({"normalize_weights": True})
-        artist = torch.ones(1, 4, 8)
-        ctx = torch.zeros(1, 4, 8)
-        merged = w._merge_embeddings([artist], [1.0], [0.5], ctx)
-        # 0.5 * artist + 0.5 * base — the fade must survive normalization.
-        self.assertTrue(torch.allclose(merged, torch.full_like(merged, 0.5)))
-
-    def test_merge_embeddings_shape_mismatch_returns_none(self):
-        w = self._wrapper({"normalize_weights": True})
-        a = torch.ones(1, 4, 8)
-        b = torch.ones(1, 5, 8)
-        ctx = torch.zeros(1, 4, 8)
-        self.assertIsNone(w._merge_embeddings([a, b], [1.0, 1.0], [1.0, 1.0], ctx))
-
     def test_output_avg_fade_blends_toward_base(self):
         # Single artist at fade 0.5 with normalize on: the output must be the
         # midpoint between the artist attention output and the base output,

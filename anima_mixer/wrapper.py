@@ -6,7 +6,6 @@ import torch
 import torch.nn as nn
 
 from .constants import (
-    COMBINE_EMBED_AVG,
     COMBINE_LOWRANK_AVG,
     COMBINE_OUTPUT_AVG,
     FUSION_BASE_PRESERVE,
@@ -303,16 +302,6 @@ class CrossAttnWrapper(nn.Module):
                 individuals, weights, fades, mask, fusion_mode, strength,
             )
 
-        if combine_mode == COMBINE_EMBED_AVG:
-            merged = self._merge_embeddings(individuals, weights, fades, context)
-            if merged is not None:
-                return self._fwd_with_combined(
-                    x, context, rope_emb, transformer_options,
-                    merged, mask, fusion_mode, strength,
-                )
-            # Mismatched embed shapes: fall through to output_avg.
-            combine_mode = COMBINE_OUTPUT_AVG
-
         if combine_mode in (COMBINE_OUTPUT_AVG, COMBINE_LOWRANK_AVG):
             return self._fwd_output_avg(
                 x, context, rope_emb, transformer_options,
@@ -346,44 +335,6 @@ class CrossAttnWrapper(nn.Module):
         ws = [w * f for w, f in zip(ws_base, fades)]
         fade_comp = sum(w * (1.0 - f) for w, f in zip(ws_base, fades))
         return ws, fade_comp
-
-    def _merge_embeddings(self, individuals, weights, fades, context):
-        """embed_avg: weighted average in LLMAdapter output space.
-
-        Costs a single extra forward per layer regardless of artist count.
-        Faded-out weight share is filled with the base context so a fading
-        artist converges to the plain base conditioning. Returns None when
-        artist embeddings disagree in shape (caller then falls back to
-        output_avg).
-        """
-        if not individuals:
-            return None
-        shapes = {tuple(a.shape) for a in individuals}
-        if len(shapes) > 1:
-            if not self._st.get("_warned_embed_avg", False):
-                logger.warning(
-                    "[AnimaCrossAttn] embed_avg: artist embeddings have "
-                    "mismatched shapes %s; falling back to output_avg.", shapes,
-                )
-                self._st["_warned_embed_avg"] = True
-            return None
-        ws, fade_comp = self._effective_weights(weights, fades)
-        merged = None
-        for artist, w in zip(individuals, ws):
-            term = artist * float(w)
-            merged = term if merged is None else merged + term
-        if abs(fade_comp) > 1e-6:
-            if context.shape[1:] == individuals[0].shape[1:]:
-                merged = merged + fade_comp * context
-            elif not self._st.get("_warned_embed_fade", False):
-                logger.warning(
-                    "[AnimaCrossAttn] embed_avg: base context shape %s does "
-                    "not match artist embeddings %s; timing fades cannot "
-                    "blend toward base in this mode.",
-                    tuple(context.shape), tuple(individuals[0].shape),
-                )
-                self._st["_warned_embed_fade"] = True
-        return merged
 
     def _fwd_output_avg(self, x, context, rope_emb, t_opts,
                         individuals, weights, fades, mask, fusion_mode, strength):

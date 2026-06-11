@@ -40,9 +40,12 @@
   `wlop%0.0-0.45~0.1`.
 - **Negative weights (style subtraction)** — `::artist::-0.5` pushes a
   style away instead of adding it. Weight range is now [-4, 4].
-- **`embed_avg` combine mode** — mixes in LLMAdapter embedding space with a
-  single extra forward per layer regardless of artist count. The fastest
-  mode; trades some per-artist fidelity.
+- ~~`embed_avg` combine mode~~ — cut before release. Live A/B testing at
+  real resolutions showed that averaging LLMAdapter embeddings re-creates
+  the token-misalignment artifact that got the old `mean`/`weighted_sum`
+  modes removed (artist tags shift the base prompt's token positions, so
+  per-position averaging blends unrelated words). Recipes that reference it
+  load with a warning and fall back to `output_avg`.
 - **`max_batch_artists` option** — caps how many artists share one batched
   forward, bounding peak VRAM with many artists at high resolution.
 - **`low_vram_cache` option** — stores static-capture and anchor caches in
@@ -56,8 +59,10 @@
 
 ### Tests
 - Real-torch test suite: low-rank determinism, perpendicular projection,
-  fusion math, CFG mask expansion, timing fade factors, embed averaging,
-  chunking, anchor fingerprints, recipe round-trips (57 tests).
+  fusion math, CFG mask expansion, timing fade factors, chunking, anchor
+  fingerprints, recipe round-trips.
+- Live ComfyUI smoke harness (`tests/live_comfy_smoke.py`): 15 real
+  sampling workflows against a running server + Anima model.
 
 ---
 

@@ -133,7 +133,7 @@ def build_recipe_graph():
     """RecipeSave -> RecipeLoad -> Pack/CrossAttn round-trip through real nodes."""
     g = base_loaders()
     g["20"] = {"class_type": "AnimaArtistRecipeSave",
-               "inputs": {"artist_chain": ARTISTS, "combine_mode": "embed_avg",
+               "inputs": {"artist_chain": ARTISTS, "combine_mode": "output_avg",
                           "fusion_mode": "interpolate", "strength": 1.2,
                           "notes": "live smoke"}}
     g["21"] = {"class_type": "AnimaArtistRecipeLoad",
@@ -143,7 +143,7 @@ def build_recipe_graph():
                          "base_prompt": BASE_PROMPT}}
     g["6"] = {"class_type": "AnimaArtistCrossAttn",
               "inputs": {"model": ["1", 0], "artist_pack": ["4", 0],
-                         "combine_mode": "embed_avg", "fusion_mode": "interpolate",
+                         "combine_mode": "output_avg", "fusion_mode": "interpolate",
                          "strength": 1.2, "enabled": True,
                          "apply_to_uncond": False,
                          "advanced_options": ["21", 2]}}
@@ -195,8 +195,8 @@ TESTS = [
      lambda: build_sampling_graph("@uof%0.0-0.5~0.1, @kieed%0.4-1.0~0.1")),
     ("03 negative weight",
      lambda: build_sampling_graph("::@uof::1, ::@kieed::-0.5")),
-    ("04 embed_avg",
-     lambda: build_sampling_graph(ARTISTS, combine="embed_avg")),
+    ("04 output_avg explicit weights",
+     lambda: build_sampling_graph("::@uof::1.5, ::@kieed::0.7, @ciloranko")),
     ("05 lowrank_avg",
      lambda: build_sampling_graph(ARTISTS, combine="lowrank_avg",
                                   opts=default_opts(lowrank_k=2))),

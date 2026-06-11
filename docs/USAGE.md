@@ -12,7 +12,7 @@ v25.1 also adds per-artist layer routing, matching the original repository's fir
 
 v25.2 adds per-artist sampling timing, a `compatibility_safe` preset, Inspector block maps, runtime warnings for suspicious cross-attention / model-wrapper conflicts, and UX helper nodes for building or previewing artist chains before CLIP encoding.
 
-v26 adds negative artist weights (style subtraction, `::name::-0.5`), smoothstep timing fades (`%start-end~fade`), the fast `embed_avg` combine mode, VRAM controls (`max_batch_artists`, `low_vram_cache`), shareable JSON recipes (`AnimaArtistRecipeSave/Load`), a per-layer style probe (`AnimaArtistProbe` + `AnimaArtistProbeReport`), a CFG correctness fix for batch sizes > 1, and a package restructure with a real test suite and CI. See [CHANGELOG.md](../CHANGELOG.md).
+v26 adds negative artist weights (style subtraction, `::name::-0.5`), smoothstep timing fades (`%start-end~fade`), VRAM controls (`max_batch_artists`, `low_vram_cache`), shareable JSON recipes (`AnimaArtistRecipeSave/Load`), a per-layer style probe (`AnimaArtistProbe` + `AnimaArtistProbeReport`), a CFG correctness fix for batch sizes > 1, and a package restructure with a real test suite and CI. See [CHANGELOG.md](../CHANGELOG.md).
 
 ## What problem it solves
 
@@ -372,18 +372,7 @@ artist_total = base_out + sum_i (w_i * D_lowrank[i])
 
 Why it stabilizes cross-seed: the seed-flipping "dominant artist" effect is largely high-rank noise in `D`. Truncating to top-k strips that noise. `k=1` (the default) projects all artists onto a single shared direction, giving maximum stability at the cost of artists looking more homogeneous. `k=2` or `3` keeps small per-artist differentiation. `k >= N` is mathematically equivalent to `output_avg` (no projection).
 
-#### `embed_avg` (v26, fastest)
-
-Mixes **before** attention, in LLMAdapter output space: the artist embeddings are weighted-averaged into a single pseudo-conditioning, then one cross-attention forward runs against it:
-
-```
-E_mix = sum_i (w_i * E_i)
-out = cross_attn(x, E_mix)
-```
-
-Cost is one extra forward per layer regardless of artist count — the cheapest multi-artist mode (~1.05x of a single artist). The trade-off: averaging in embedding space happens before attention picks tokens, so style-divergent artists blur together more than under `output_avg`. Good for fast exploration and weight hunting; switch to `output_avg` or `lowrank_avg` for final renders. Works with all fusion modes and with per-artist layer/timing routing; if artist embeddings disagree in shape it silently falls back to `output_avg`.
-
-> Earlier versions had `mean` and `weighted_sum` modes (per-position weighted average over LLMAdapter outputs). They were removed: position-i in different artists carries different semantics, so element-wise averaging causes K/V semantic misalignment and inevitably produces broken images. A `replace` mode was also removed: it discards the main prompt's role in cross-attention entirely, severely degrading prompt adherence.
+> Earlier versions had `mean` and `weighted_sum` modes (per-position weighted average over LLMAdapter outputs). They were removed: position-i in different artists carries different semantics, so element-wise averaging causes K/V semantic misalignment and inevitably produces broken images. A `replace` mode was also removed for discarding the main prompt's role entirely. An `embed_avg` mode briefly existed during v26 development and was cut before release after live A/B testing reproduced exactly that misalignment artifact (smeared, washed-out outputs at real resolutions).
 
 ### fusion_mode: how the merged artist acts on the main prompt
 
