@@ -25,3 +25,6 @@ env/
 # ComfyUI 用户可能在节点目录里临时放的东西
 test_outputs/
 debug_*.png
+
+# live smoke-test scratch files (may contain personal prompts)
+tests/_*.json
