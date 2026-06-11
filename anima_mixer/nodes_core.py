@@ -1,0 +1,853 @@
+"""Core ComfyUI nodes: Pack, CrossAttn patcher, and the layer Probe."""
+
+import logging
+import uuid
+
+import torch
+
+from .anchor import make_sigma_capture
+from .chain_tools import format_layer_span
+from .constants import (
+    COMBINE_CHOICES,
+    COMBINE_EMBED_AVG,
+    COMBINE_LOWRANK_AVG,
+    COMBINE_OUTPUT_AVG,
+    FUSION_BASE_PRESERVE,
+    FUSION_CHOICES,
+    FUSION_CONCAT_WITH_BASE,
+    FUSION_INTERPOLATE,
+    ANCHOR_LAYER_THRESHOLD_DISABLED,
+    ANCHOR_SEEDS_MAX,
+    MAX_ARTISTS,
+    STATIC_CAPTURE_K_DEFAULT,
+    STATIC_CAPTURE_K_MAX,
+)
+from .options import merge_runtime_options
+from .parsing import (
+    parse_artist_layer_routes,
+    parse_artist_timing_routes,
+    parse_artist_weights,
+    resolve_artist_layer_routes,
+    resolve_artist_timing_routes,
+    resolve_target_blocks_from_options,
+    split_artist_chain,
+)
+from .patching import (
+    cleanup_residual_wrappers,
+    describe_external_cross_attn_patches,
+    extract_conditioning,
+    unwrap_cross_attn,
+    validate_model,
+)
+from .wrapper import CrossAttnWrapper
+
+logger = logging.getLogger(__name__)
+
+
+class AnyType(str):
+    """Wildcard type marker accepted by ComfyUI for 'any' inputs."""
+
+    def __ne__(self, other):
+        return False
+
+
+ANY_TYPE = AnyType("*")
+
+# Probe results live here between graph executions, keyed by probe_id. Only
+# a slim view of the runtime state is stored (the stats containers, shared
+# by reference with the live wrappers) — never the full state, which would
+# pin the diffusion model and artist tensors in memory across runs.
+PROBE_REGISTRY = {}
+_PROBE_REGISTRY_LIMIT = 8
+
+
+def _registry_store(probe_id, state):
+    PROBE_REGISTRY[probe_id] = {
+        "probe_stats": state["probe_stats"],
+        "probe_labels": state["probe_labels"],
+        "probe_num_blocks": state["probe_num_blocks"],
+        "_probe_seen_sigmas": state["_probe_seen_sigmas"],
+    }
+    while len(PROBE_REGISTRY) > _PROBE_REGISTRY_LIMIT:
+        PROBE_REGISTRY.pop(next(iter(PROBE_REGISTRY)))
+
+
+class AnimaArtistPack:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "clip": ("CLIP",),
+                "artist_chain": ("STRING", {
+                    "multiline": True,
+                    "default": "",
+                    "tooltip": (
+                        "Artist chain. Separate artists with commas or newlines.\n"
+                        "Example: wlop, sakimichan, krenz\n"
+                        "\n"
+                        "Two weight syntaxes (they can coexist and stack):\n"
+                        "  1) parentheses (wlop:1.5) - CLIP-side, non-linear\n"
+                        "  2) ::weight ::wlop::1.5 - injection-side, linear\n"
+                        "\n"
+                        "Default weight 1.0; range [-4.0, 4.0]. Negative weights\n"
+                        "subtract that artist's style (style subtraction).\n"
+                        "::weight stacks with parentheses: ::(wlop:1.1)::0.8\n"
+                        "Optional per-artist layer route: wlop@0-8, krenz@9-18\n"
+                        "Optional per-artist timing: wlop@0-8%0.0-0.45\n"
+                        "Optional timing fade: wlop%0.0-0.45~0.1 (smoothstep edges)\n"
+                        "\n"
+                        "When any artist uses ::weight, normalize_weights is\n"
+                        "bypassed at runtime (explicit weights stay absolute)."
+                    )
+                }),
+            },
+            "optional": {
+                "base_prompt": ("STRING", {
+                    "multiline": True,
+                    "default": "",
+                    "tooltip": (
+                        "Main prompt (optional). Follows Anima's recommended layout: "
+                        "artist first, then a newline, then the main prompt "
+                        "('<artist>\\n<base_prompt>'). Leave empty to encode the "
+                        "artist names alone."
+                    ),
+                }),
+            },
+        }
+
+    RETURN_TYPES = ("ANIMA_PACK",)
+    RETURN_NAMES = ("artist_pack",)
+    FUNCTION = "pack"
+    CATEGORY = "Anima/CrossAttn"
+
+    def pack(self, clip, artist_chain, base_prompt=""):
+        parts = split_artist_chain(artist_chain)
+        parts, timing_routes = parse_artist_timing_routes(parts)
+        parts, layer_routes = parse_artist_layer_routes(parts)
+        names, parsed_weights, has_explicit = parse_artist_weights(parts)
+        base = (base_prompt or "").strip()
+
+        try:
+            base_tokens = clip.tokenize(base)
+            base_conditioning = clip.encode_from_tokens_scheduled(base_tokens)
+        except Exception as e:
+            raise ValueError(
+                f"[AnimaArtistPack] failed to encode base_prompt (text={base!r}): {e}"
+            )
+
+        if not names:
+            return ({
+                "conditionings": [],
+                "labels": [],
+                "weights": [],
+                "layer_routes": [],
+                "timing_routes": [],
+                "has_explicit_weights": False,
+                "base_prompt": base,
+                "base_conditioning": base_conditioning,
+            },)
+
+        if len(names) > MAX_ARTISTS:
+            logger.warning(
+                "[AnimaArtistPack] artist count %d exceeds the limit %d; truncating",
+                len(names), MAX_ARTISTS,
+            )
+            names = names[:MAX_ARTISTS]
+            parsed_weights = parsed_weights[:MAX_ARTISTS]
+            layer_routes = layer_routes[:MAX_ARTISTS]
+            timing_routes = timing_routes[:MAX_ARTISTS]
+
+        conditionings = []
+        for name in names:
+            text = f"{name}\n{base}" if base else name
+            try:
+                tokens = clip.tokenize(text)
+                cond = clip.encode_from_tokens_scheduled(tokens)
+            except Exception as e:
+                raise ValueError(
+                    f"[AnimaArtistPack] encoding failed (text={text!r}): {e}"
+                )
+            conditionings.append(cond)
+
+        if has_explicit:
+            logger.info(
+                "[AnimaArtistPack] %d artists carry ::weight syntax; the linear "
+                "injection path will be used",
+                sum(1 for w in parsed_weights if w != 1.0),
+            )
+
+        return ({
+            "conditionings": conditionings,
+            "labels": names,
+            "weights": parsed_weights,
+            "layer_routes": layer_routes,
+            "timing_routes": timing_routes,
+            "has_explicit_weights": has_explicit,
+            "base_prompt": base,
+            "base_conditioning": base_conditioning,
+        },)
+
+
+# ComfyUI's percent_to_sigma(0.0) returns a huge sentinel (999999999.9)
+# meaning "always active". Fine for window-inclusion tests, but useless as a
+# finite anchor for fade interpolation.
+_SIGMA_SENTINEL = 1e8
+
+
+def _finite_sigma(ms, percent):
+    """percent_to_sigma with a finite stand-in for the percent=0 sentinel.
+
+    The stand-in is the real near-max sigma padded by 0.1% so the very first
+    sampling step (at sigma_max) still falls inside the window.
+    """
+    s = float(ms.percent_to_sigma(percent))
+    if s >= _SIGMA_SENTINEL:
+        s = float(ms.percent_to_sigma(1e-4)) * 1.001
+    return s
+
+
+def _percent_window_to_sigma_route(ms, timing):
+    """Convert a percent-space (start, end, fade) window to sigma space.
+
+    Returns (lo, hi, fade_in_lo, fade_out_hi) for timing_fade_factor.
+    Sigma decreases as percent increases, so window start -> hi.
+    """
+    start, end, fade = timing
+    fade_eff = min(float(fade), max(0.0, (end - start) / 2.0))
+    hi = _finite_sigma(ms, start)
+    lo = _finite_sigma(ms, end)
+    fade_in_lo = _finite_sigma(ms, min(start + fade_eff, end))
+    fade_out_hi = _finite_sigma(ms, max(end - fade_eff, start))
+    lo, hi = min(lo, hi), max(lo, hi)
+    fade_in_lo = min(max(fade_in_lo, lo), hi)
+    fade_out_hi = min(max(fade_out_hi, lo), hi)
+    return (lo, hi, fade_in_lo, fade_out_hi)
+
+
+def _build_runtime_state(enabled, fusion_mode, combine_mode, strength,
+                         apply_to_uncond, raws, ids_list, w_list, user_weights,
+                         labels, artist_layer_routes, has_artist_layer_routes,
+                         artist_timing_routes, has_artist_timing_routes,
+                         normalize_w, has_explicit_weights, preset_name,
+                         adv, dm, sigma_range, external_patches):
+    return {
+        "enabled": bool(enabled),
+        "fusion_mode": fusion_mode,
+        "combine_mode": combine_mode,
+        "strength": float(strength),
+        "apply_to_uncond": bool(apply_to_uncond),
+        "raws": raws,
+        "ids_list": ids_list,
+        "w_list": w_list,
+        "user_weights": user_weights,
+        "labels": labels,
+        "artist_layer_routes": artist_layer_routes,
+        "has_artist_layer_routes": has_artist_layer_routes,
+        "artist_timing_routes": artist_timing_routes,
+        "has_artist_timing_routes": has_artist_timing_routes,
+        "normalize_weights": normalize_w,
+        "has_explicit_weights": has_explicit_weights,
+        "preset_name": preset_name,
+        "artist_ema_alpha": float(adv.get("artist_ema_alpha", 0.0)),
+        "lowrank_k": int(adv.get("lowrank_k", 1)),
+        "artist_static_capture": bool(adv.get("artist_static_capture", False)),
+        "static_capture_k": int(adv.get("static_capture_k", STATIC_CAPTURE_K_DEFAULT)),
+        "artist_anchor_q": bool(adv.get("artist_anchor_q", False)),
+        "anchor_seeds_count": int(adv.get("anchor_seeds_count", 1)),
+        "anchor_user_blend": float(adv.get("anchor_user_blend", 0.0)),
+        "anchor_deep_layer_threshold": int(
+            adv.get("anchor_deep_layer_threshold", ANCHOR_LAYER_THRESHOLD_DISABLED)
+        ),
+        "max_batch_artists": int(adv.get("max_batch_artists", 0) or 0),
+        "low_vram_cache": bool(adv.get("low_vram_cache", False)),
+        "individuals": None,
+        "real_lens": None,
+        "dm_ref": dm,
+        "sigma_range": sigma_range,
+        "current_sigma": None,
+        "external_cross_attn_patches": external_patches,
+        "_ema_cache": {},
+        "_ema_last_sigma": None,
+        "_static_cache": {},
+        "_static_max_sigma": None,
+        "_anchor_cache": {},
+        "_anchor_cache_key": None,
+        "_anchor_last_sigma": None,
+        "_in_anchor_run": False,
+        "_anchor_failed": False,
+    }
+
+
+class AnimaArtistCrossAttn:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model": ("MODEL",),
+                "artist_pack": ("ANIMA_PACK",),
+                "combine_mode": (
+                    COMBINE_CHOICES,
+                    {
+                        "default": COMBINE_OUTPUT_AVG,
+                        "tooltip": (
+                            "concat: concatenate artist tokens as K/V\n"
+                            "output_avg: weighted average of per-artist attention outputs\n"
+                            "lowrank_avg: deterministic low-rank constraint on artist deltas\n"
+                            "embed_avg: average in LLMAdapter embedding space - fastest\n"
+                            "  (1 extra forward per layer regardless of artist count),\n"
+                            "  but mixes before attention so artists can blur together"
+                        ),
+                    },
+                ),
+                "fusion_mode": (
+                    FUSION_CHOICES,
+                    {
+                        "default": FUSION_INTERPOLATE,
+                        "tooltip": (
+                            "interpolate: out = lerp(base, artist, strength)\n"
+                            "concat_with_base: KV=[base; artist] single forward\n"
+                            "base_preserve: strip the artist component parallel to base\n"
+                            "  out = base + strength * proj_perp(artist - base)\n"
+                            "  base content direction stays untouched\n"
+                            "  compatible with lowrank_avg / EMA"
+                        ),
+                    },
+                ),
+                "strength": ("FLOAT", {
+                    "default": 1.0, "min": 0.0, "max": 4.0, "step": 0.05,
+                    "tooltip": (
+                        "Artist injection strength.\n"
+                        "0.0-1.0: interpolation lerp(base, artist, strength)\n"
+                        "1.0-4.0: extrapolation base + strength * (artist - base)\n"
+                        "  Amplifies the artist's deviation; decoupled from artist count.\n"
+                        "  Recommended 1.5-2.5; above 3 tends to oversaturate."
+                    ),
+                }),
+                "enabled": ("BOOLEAN", {"default": True}),
+                "apply_to_uncond": ("BOOLEAN", {"default": False}),
+            },
+            "optional": {
+                "advanced_options": ("ANIMA_OPTS",),
+                "preset": ("ANIMA_PRESET",),
+            },
+        }
+
+    RETURN_TYPES = ("MODEL", "CONDITIONING")
+    RETURN_NAMES = ("model", "base_prompt")
+    FUNCTION = "patch"
+    CATEGORY = "Anima/CrossAttn"
+
+    def patch(self, model, artist_pack, combine_mode, fusion_mode,
+              strength, enabled, apply_to_uncond, advanced_options=None, preset=None):
+        combine_mode, fusion_mode, strength, adv, preset_name = merge_runtime_options(
+            combine_mode, fusion_mode, strength, advanced_options, preset,
+        )
+
+        if not isinstance(artist_pack, dict):
+            raise ValueError(
+                "[AnimaCrossAttn] artist_pack has the wrong type; connect the "
+                "output of an AnimaArtistPack node"
+            )
+
+        base_cond_out = artist_pack.get("base_conditioning")
+        if base_cond_out is None:
+            raise ValueError(
+                "[AnimaCrossAttn] artist_pack is missing base_conditioning. "
+                "Restart ComfyUI so AnimaArtistPack reloads at the current version"
+            )
+
+        conditionings = artist_pack.get("conditionings") or []
+        if not enabled or not conditionings:
+            # Nothing to inject: hand back the unpatched model with zero overhead.
+            return (model, base_cond_out)
+
+        start_percent = float(adv.get("start_percent", 0.0))
+        end_percent = float(adv.get("end_percent", 1.0))
+        normalize_w = bool(adv.get("normalize_weights", True))
+        artist_ema_alpha = float(adv.get("artist_ema_alpha", 0.0))
+        artist_static_capture = bool(adv.get("artist_static_capture", False))
+        static_capture_k = int(adv.get("static_capture_k", STATIC_CAPTURE_K_DEFAULT))
+        adv["static_capture_k"] = max(1, min(static_capture_k, STATIC_CAPTURE_K_MAX))
+        artist_anchor_q = bool(adv.get("artist_anchor_q", False))
+        anchor_seeds_count = int(adv.get("anchor_seeds_count", 1))
+        adv["anchor_seeds_count"] = max(1, min(anchor_seeds_count, ANCHOR_SEEDS_MAX))
+        anchor_user_blend = float(adv.get("anchor_user_blend", 0.0))
+        adv["anchor_user_blend"] = max(0.0, min(1.0, anchor_user_blend))
+
+        use_sigma_range = (start_percent > 0.0) or (end_percent < 1.0)
+        need_sigma_capture = (
+            use_sigma_range or (artist_ema_alpha > 0.0)
+            or artist_static_capture or artist_anchor_q
+        )
+
+        # Mutual-exclusion checks.
+        if artist_static_capture and artist_ema_alpha > 0.0:
+            logger.info(
+                "[AnimaCrossAttn] artist_ema_alpha=%.2f is ignored while "
+                "artist_static_capture is on (artist outputs are already static).",
+                artist_ema_alpha,
+            )
+        if artist_static_capture and fusion_mode == FUSION_CONCAT_WITH_BASE:
+            logger.warning(
+                "[AnimaCrossAttn] artist_static_capture is incompatible with "
+                "fusion=concat_with_base (x changes every step); static capture "
+                "is ignored for this run."
+            )
+        if artist_anchor_q and artist_static_capture:
+            logger.warning(
+                "[AnimaCrossAttn] artist_anchor_q and artist_static_capture are "
+                "mutually exclusive; static_capture is disabled (anchor_q wins)."
+            )
+            adv["artist_static_capture"] = False
+        if artist_anchor_q and fusion_mode == FUSION_CONCAT_WITH_BASE:
+            logger.warning(
+                "[AnimaCrossAttn] artist_anchor_q is incompatible with "
+                "fusion=concat_with_base; anchor_q is disabled for this run."
+            )
+            adv["artist_anchor_q"] = False
+        if combine_mode == COMBINE_EMBED_AVG and artist_static_capture:
+            logger.info(
+                "[AnimaCrossAttn] embed_avg merges before attention; "
+                "static_capture applies to the merged pseudo-artist."
+            )
+
+        labels = artist_pack.get("labels") or []
+        layer_route_texts = artist_pack.get("layer_routes") or []
+        timing_route_texts = artist_pack.get("timing_routes") or []
+
+        raws, ids_list, w_list = [], [], []
+        for idx, c in enumerate(conditionings):
+            raw, ids, w = extract_conditioning(c)
+            if raw is None:
+                label = labels[idx] if idx < len(labels) else f"#{idx}"
+                raise ValueError(
+                    f"[AnimaCrossAttn] artist[{label}] conditioning is empty. "
+                    "Do the CLIP and model match?"
+                )
+            raws.append(raw)
+            ids_list.append(ids)
+            w_list.append(w)
+
+        n = len(raws)
+        parsed_weights = artist_pack.get("weights")
+        has_explicit_weights = bool(artist_pack.get("has_explicit_weights", False))
+        if isinstance(parsed_weights, (list, tuple)) and len(parsed_weights) == n:
+            user_weights = [float(w) for w in parsed_weights]
+        else:
+            user_weights = [1.0] * n
+            has_explicit_weights = False
+
+        if has_explicit_weights and normalize_w:
+            normalize_w = False
+            logger.info(
+                "[AnimaCrossAttn] explicit ::weight detected; "
+                "normalize_weights is bypassed."
+            )
+
+        if any(w < 0.0 for w in user_weights):
+            logger.info(
+                "[AnimaCrossAttn] negative artist weights detected; those "
+                "artists subtract their style direction (style subtraction)."
+            )
+
+        if fusion_mode == FUSION_BASE_PRESERVE and float(strength) < 0.3:
+            logger.info(
+                "[AnimaCrossAttn] fusion=base_preserve at strength=%.2f (<0.3) "
+                "is very subtle; consider strength >= 0.7.", float(strength),
+            )
+
+        if float(strength) > 1.0:
+            logger.info(
+                "[AnimaCrossAttn] strength=%.2f > 1.0 enters extrapolation: "
+                "out = base + %.2f * (artist - base). %s.",
+                float(strength), float(strength),
+                "Recommended range 1.5-2.5" if float(strength) <= 3.0
+                else "Current value is high and may oversaturate",
+            )
+
+        if not normalize_w and n > 1 and combine_mode in (COMBINE_OUTPUT_AVG, COMBINE_LOWRANK_AVG):
+            effective_weight_sum = sum(abs(w) for w in user_weights)
+            if effective_weight_sum >= 4.0 and not has_explicit_weights:
+                raise ValueError(
+                    f"[AnimaCrossAttn] normalize_weights=False with {n} artists "
+                    f"(effective weight sum {effective_weight_sum:.2f}) will "
+                    f"visibly amplify the cross-attention output under "
+                    f"combine={combine_mode} and almost always break the image.\n"
+                    f"Pick one:\n"
+                    f"  1) set normalize_weights=True in AnimaArtistOptions (recommended)\n"
+                    f"  2) lower the linear strength via ::name::0.25 in the chain\n"
+                    f"  3) switch combine_mode to concat (no weighted sum)"
+                )
+            elif effective_weight_sum > 1.5:
+                logger.warning(
+                    "[AnimaCrossAttn] normalize_weights=False and effective weight "
+                    "sum %.2f (artists=%d, combine=%s); the output may be too "
+                    "strong. Lower ::weight values, enable normalize, or use concat.",
+                    effective_weight_sum, n, combine_mode,
+                )
+
+        try:
+            dm = model.get_model_object("diffusion_model")
+        except Exception:
+            dm = model.model.diffusion_model
+
+        cleanup_residual_wrappers(dm)
+
+        ok, num_blocks, ctx_dim, msg = validate_model(dm)
+        if not ok:
+            raise ValueError(f"[AnimaCrossAttn] unsupported model: {msg}")
+        if not hasattr(dm, "preprocess_text_embeds"):
+            raise ValueError(
+                "[AnimaCrossAttn] this is not an Anima model "
+                "(missing preprocess_text_embeds)"
+            )
+
+        artist_layer_routes, has_artist_layer_routes = resolve_artist_layer_routes(
+            layer_route_texts, num_blocks,
+        )
+        if len(artist_layer_routes) < n:
+            artist_layer_routes.extend([None] * (n - len(artist_layer_routes)))
+        elif len(artist_layer_routes) > n:
+            artist_layer_routes = artist_layer_routes[:n]
+
+        artist_timing_percent_routes, has_artist_timing_routes = resolve_artist_timing_routes(
+            timing_route_texts,
+        )
+        if len(artist_timing_percent_routes) < n:
+            artist_timing_percent_routes.extend([None] * (n - len(artist_timing_percent_routes)))
+        elif len(artist_timing_percent_routes) > n:
+            artist_timing_percent_routes = artist_timing_percent_routes[:n]
+
+        target_blocks = resolve_target_blocks_from_options(adv, num_blocks, strict=True)
+        external_patches = describe_external_cross_attn_patches(dm, target_blocks)
+        if external_patches and not adv.get("compatibility_mode", False):
+            logger.warning(
+                "[AnimaCrossAttn] possible external cross-attn wrappers detected: %s. "
+                "If the artist effect weakens or disappears, try the "
+                "compatibility_safe preset.",
+                "; ".join(external_patches[:8]),
+            )
+
+        sigma_range = None
+        if use_sigma_range:
+            try:
+                ms = model.get_model_object("model_sampling")
+                s_at_start = float(ms.percent_to_sigma(start_percent))
+                s_at_end = float(ms.percent_to_sigma(end_percent))
+                lo, hi = sorted([s_at_end, s_at_start])
+                sigma_range = (lo, hi)
+            except Exception as e:
+                logger.warning(
+                    "[AnimaCrossAttn] failed to resolve the sigma range: %s. "
+                    "Step-range control is disabled.", e,
+                )
+                sigma_range = None
+
+        artist_timing_routes = [None] * n
+        if has_artist_timing_routes:
+            try:
+                ms = model.get_model_object("model_sampling")
+                artist_timing_routes = []
+                for timing in artist_timing_percent_routes:
+                    if timing is None:
+                        artist_timing_routes.append(None)
+                        continue
+                    artist_timing_routes.append(
+                        _percent_window_to_sigma_route(ms, timing)
+                    )
+            except Exception as e:
+                logger.warning(
+                    "[AnimaCrossAttn] failed to resolve per-artist timing sigma "
+                    "ranges: %s. Timing routes are treated as always active.", e,
+                )
+                artist_timing_routes = [None] * n
+                has_artist_timing_routes = False
+
+        need_sigma_capture = need_sigma_capture or has_artist_timing_routes
+
+        m = model.clone()
+
+        state = _build_runtime_state(
+            enabled, fusion_mode, combine_mode, strength, apply_to_uncond,
+            raws, ids_list, w_list, user_weights, labels,
+            artist_layer_routes, has_artist_layer_routes,
+            artist_timing_routes, has_artist_timing_routes,
+            normalize_w, has_explicit_weights, preset_name,
+            adv, dm, sigma_range, external_patches,
+        )
+
+        if need_sigma_capture:
+            prev = m.model_options.get("model_function_wrapper")
+            if prev is not None and not adv.get("compatibility_mode", False):
+                logger.warning(
+                    "[AnimaCrossAttn] another model_function_wrapper is already "
+                    "installed; this node chains to it. If timing routes or "
+                    "stabilizers stop working, enable compatibility_safe or "
+                    "simplify the other wrapper nodes."
+                )
+            m.set_model_unet_function_wrapper(make_sigma_capture(state, prev))
+
+        for i in target_blocks:
+            inner = unwrap_cross_attn(dm.blocks[i].cross_attn)
+            wrapper = CrossAttnWrapper(inner, state, i)
+            m.add_object_patch(f"diffusion_model.blocks.{i}.cross_attn", wrapper)
+
+        return (m, base_cond_out)
+
+
+class AnimaArtistProbe:
+    """Measure per-artist, per-layer style influence during one sampling run.
+
+    Patches the model in probe mode: every layer records the relative delta
+    norm ``||artist_out - base_out|| / ||base_out||`` for each artist while
+    the image generates from the base prompt only (injection is NOT applied,
+    so the measurement reflects the unmixed trajectory). Read the results
+    with AnimaArtistProbeReport after the sampler has run.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model": ("MODEL",),
+                "artist_pack": ("ANIMA_PACK",),
+                "probe_steps": ("INT", {
+                    "default": 6, "min": 1, "max": 24, "step": 1,
+                    "tooltip": (
+                        "Number of sampling steps to measure. Early steps carry "
+                        "the most style signal; 4-8 is usually enough."
+                    ),
+                }),
+            },
+        }
+
+    RETURN_TYPES = ("MODEL", "CONDITIONING", "STRING")
+    RETURN_NAMES = ("model", "base_prompt", "probe_id")
+    FUNCTION = "probe"
+    CATEGORY = "Anima/CrossAttn"
+
+    def probe(self, model, artist_pack, probe_steps=6):
+        if not isinstance(artist_pack, dict):
+            raise ValueError(
+                "[AnimaArtistProbe] artist_pack has the wrong type; connect the "
+                "output of an AnimaArtistPack node"
+            )
+        base_cond_out = artist_pack.get("base_conditioning")
+        if base_cond_out is None:
+            raise ValueError(
+                "[AnimaArtistProbe] artist_pack is missing base_conditioning."
+            )
+        conditionings = artist_pack.get("conditionings") or []
+        labels = list(artist_pack.get("labels") or [])
+        if not conditionings:
+            raise ValueError("[AnimaArtistProbe] artist_pack has no artists to probe.")
+
+        raws, ids_list, w_list = [], [], []
+        for idx, c in enumerate(conditionings):
+            raw, ids, w = extract_conditioning(c)
+            if raw is None:
+                label = labels[idx] if idx < len(labels) else f"#{idx}"
+                raise ValueError(
+                    f"[AnimaArtistProbe] artist[{label}] conditioning is empty."
+                )
+            raws.append(raw)
+            ids_list.append(ids)
+            w_list.append(w)
+
+        try:
+            dm = model.get_model_object("diffusion_model")
+        except Exception:
+            dm = model.model.diffusion_model
+
+        cleanup_residual_wrappers(dm)
+        ok, num_blocks, _, msg = validate_model(dm)
+        if not ok:
+            raise ValueError(f"[AnimaArtistProbe] unsupported model: {msg}")
+
+        probe_id = uuid.uuid4().hex[:12]
+        n = len(raws)
+
+        state = _build_runtime_state(
+            True, FUSION_INTERPOLATE, COMBINE_OUTPUT_AVG, 1.0, False,
+            raws, ids_list, w_list, [1.0] * n, labels,
+            [None] * n, False, [None] * n, False,
+            True, False, None,
+            {"static_capture_k": STATIC_CAPTURE_K_DEFAULT},
+            dm, None, [],
+        )
+        state["probe_steps"] = max(1, int(probe_steps))
+        state["probe_stats"] = {}      # layer_idx -> [ [sum, count], ... ] per artist
+        state["probe_labels"] = labels
+        state["probe_num_blocks"] = num_blocks
+        state["_probe_seen_sigmas"] = set()
+
+        m = model.clone()
+        prev = m.model_options.get("model_function_wrapper")
+        m.set_model_unet_function_wrapper(make_sigma_capture(state, prev))
+        for i in range(num_blocks):
+            inner = unwrap_cross_attn(dm.blocks[i].cross_attn)
+            wrapper = _ProbeCrossAttnWrapper(inner, state, i)
+            m.add_object_patch(f"diffusion_model.blocks.{i}.cross_attn", wrapper)
+
+        _registry_store(probe_id, state)
+        logger.info(
+            "[AnimaArtistProbe] probe %s armed for %d artists x %d layers "
+            "(first %d steps)", probe_id, n, num_blocks, state["probe_steps"],
+        )
+        return (m, base_cond_out, probe_id)
+
+
+class _ProbeCrossAttnWrapper(CrossAttnWrapper):
+    """Measurement-only wrapper: never alters the output."""
+
+    def _dispatch(self, x, context, rope_emb, transformer_options):
+        st = self._st
+        base_out = self.original(x, context, rope_emb=rope_emb,
+                                 transformer_options=transformer_options)
+
+        stats = st.setdefault("probe_stats", {})
+        layer_stats = stats.get(self._idx)
+        n = len(st["raws"])
+        if layer_stats is None:
+            layer_stats = [[0.0, 0] for _ in range(n)]
+            stats[self._idx] = layer_stats
+        # Measure only the first probe_steps distinct sigmas; afterwards the
+        # forward is a plain pass-through (and the seen-set stops growing so
+        # the report's step count stays accurate).
+        seen = st.setdefault("_probe_seen_sigmas", set())
+        cur = st.get("current_sigma")
+        budget = int(st.get("probe_steps", 6))
+        if cur is not None:
+            cur_key = round(float(cur), 4)
+            if cur_key not in seen:
+                if len(seen) >= budget:
+                    return base_out
+                seen.add(cur_key)
+
+        from .patching import build_artists
+        individuals, _ = build_artists(st, context)
+        outs = self._collect_artist_outputs(
+            x, context, rope_emb, transformer_options, individuals,
+            FUSION_INTERPOLATE,
+        )
+        base_norm = float(base_out.detach().to(torch.float32).norm().item())
+        if base_norm <= 1e-8:
+            return base_out
+        for i, out_i in enumerate(outs):
+            delta = (out_i.detach().to(torch.float32)
+                     - base_out.detach().to(torch.float32))
+            rel = float(delta.norm().item()) / base_norm
+            layer_stats[i][0] += rel
+            layer_stats[i][1] += 1
+        return base_out
+
+
+def _suggest_layer_range(scores, top_fraction=0.35):
+    """Suggest a contiguous layer range covering the strongest layers."""
+    if not scores:
+        return None
+    indexed = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
+    keep = max(1, int(round(len(scores) * top_fraction)))
+    top = sorted(indexed[:keep])
+    return top[0], top[-1]
+
+
+class AnimaArtistProbeReport:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "probe_id": ("STRING", {"default": "", "forceInput": True}),
+            },
+            "optional": {
+                "trigger": (ANY_TYPE, {
+                    "tooltip": (
+                        "Connect any post-sampler output (e.g. the decoded IMAGE) "
+                        "so this report runs after sampling finished."
+                    ),
+                }),
+            },
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("report",)
+    FUNCTION = "report"
+    CATEGORY = "Anima/CrossAttn"
+    OUTPUT_NODE = True
+
+    @classmethod
+    def IS_CHANGED(cls, probe_id, trigger=None):
+        return float("nan")  # always re-run; registry contents change
+
+    def report(self, probe_id, trigger=None):
+        state = PROBE_REGISTRY.get(str(probe_id or "").strip())
+        if state is None:
+            text = (
+                "Anima Artist Probe Report\n\n"
+                f"status: NO DATA\nprobe_id: {probe_id!r}\n\n"
+                "No measurements found. Wire AnimaArtistProbe's model output "
+                "through the sampler, connect its probe_id here, and connect "
+                "a post-sampler output (e.g. IMAGE) to trigger."
+            )
+            return {"ui": {"text": [text]}, "result": (text,)}
+
+        stats = state.get("probe_stats") or {}
+        labels = list(state.get("probe_labels") or [])
+        num_blocks = int(state.get("probe_num_blocks", 0))
+        if not stats:
+            text = (
+                "Anima Artist Probe Report\n\n"
+                "status: EMPTY\n\n"
+                "The probe is armed but no samples were recorded yet. "
+                "Run the sampler first (connect trigger to a post-sampler output)."
+            )
+            return {"ui": {"text": [text]}, "result": (text,)}
+
+        n = len(labels)
+        # scores[artist][layer] = mean relative delta
+        scores = [[0.0] * num_blocks for _ in range(n)]
+        for layer_idx, layer_stats in stats.items():
+            for i, (total, count) in enumerate(layer_stats):
+                if i < n and 0 <= layer_idx < num_blocks and count > 0:
+                    scores[i][layer_idx] = total / count
+
+        lines = [
+            "Anima Artist Probe Report",
+            "",
+            "status: OK",
+            f"artists: {n}",
+            f"layers: {num_blocks}",
+            f"measured steps: {len(state.get('_probe_seen_sigmas') or [])}",
+            "",
+            "relative style influence per layer "
+            "(||artist_out - base_out|| / ||base_out||):",
+        ]
+        for i, label in enumerate(labels):
+            row = scores[i]
+            peak = max(row) if row else 0.0
+            lines.append("")
+            lines.append(f"artist {i + 1}: {label} (peak {peak:.3f})")
+            # Compact bar chart, 8 layers per line.
+            for start in range(0, num_blocks, 8):
+                seg = row[start:start + 8]
+                cells = []
+                for j, v in enumerate(seg):
+                    bar_len = 0 if peak <= 0 else int(round(6 * v / peak))
+                    cells.append(f"L{start + j:>2}:{'#' * bar_len:<6}")
+                lines.append("  " + " ".join(cells))
+            suggestion = _suggest_layer_range(row)
+            if suggestion is not None:
+                lo, hi = suggestion
+                lines.append(
+                    f"  suggested route: {label}@{lo}-{hi}  "
+                    f"({format_layer_span(lo, hi)} carries the strongest signal)"
+                )
+        lines.extend([
+            "",
+            "how to use:",
+            "  - copy the suggested @routes into your artist chain",
+            "  - artists with flat profiles mix well at all layers",
+            "  - artists with sharp peaks benefit most from layer routing",
+        ])
+        text = "\n".join(lines)
+        return {"ui": {"text": [text]}, "result": (text,)}
