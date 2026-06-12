@@ -40,6 +40,13 @@
   `wlop%0.0-0.45~0.1`.
 - **Negative weights (style subtraction)** — `::artist::-0.5` pushes a
   style away instead of adding it. Weight range is now [-4, 4].
+- **`match_base_norm` option (default on)** — rescales the mixed artist
+  attention output to the base output's per-row RMS energy (clamped to
+  0.5–2.0x) before fusion. The artist mixture's activation energy can
+  drift from what downstream blocks were trained on; the mismatch
+  compounds across layers and surfaces as seed-dependent style-strength
+  swings (style drift). Style direction is preserved, only magnitude is
+  corrected. Disable to reproduce the previous behavior exactly.
 - ~~`embed_avg` combine mode~~ — cut before release. Live A/B testing at
   real resolutions showed that averaging LLMAdapter embeddings re-creates
   the token-misalignment artifact that got the old `mean`/`weighted_sum`

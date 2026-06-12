@@ -12,7 +12,7 @@ v25.1 also adds per-artist layer routing, matching the original repository's fir
 
 v25.2 adds per-artist sampling timing, a `compatibility_safe` preset, Inspector block maps, runtime warnings for suspicious cross-attention / model-wrapper conflicts, and UX helper nodes for building or previewing artist chains before CLIP encoding.
 
-v26 adds negative artist weights (style subtraction, `::name::-0.5`), smoothstep timing fades (`%start-end~fade`), VRAM controls (`max_batch_artists`, `low_vram_cache`), shareable JSON recipes (`AnimaArtistRecipeSave/Load`), a per-layer style probe (`AnimaArtistProbe` + `AnimaArtistProbeReport`), a CFG correctness fix for batch sizes > 1, and a package restructure with a real test suite and CI. See [CHANGELOG.md](../CHANGELOG.md).
+v26 adds negative artist weights (style subtraction, `::name::-0.5`), smoothstep timing fades (`%start-end~fade`), style-drift reduction (`match_base_norm`), VRAM controls (`max_batch_artists`, `low_vram_cache`), shareable JSON recipes (`AnimaArtistRecipeSave/Load`), a per-layer style probe (`AnimaArtistProbe` + `AnimaArtistProbeReport`), a CFG correctness fix for batch sizes > 1, and a package restructure with a real test suite and CI. See [CHANGELOG.md](../CHANGELOG.md).
 
 ## What problem it solves
 
@@ -311,6 +311,7 @@ Not connecting this node = default behavior. Connecting it makes its settings ta
 | `compatibility_mode` | Forces `concat + concat_with_base`, disables EMA/static/anchor stabilizers, and reduces conflict risk with regional/attention-patching nodes |
 | `max_batch_artists` (v26) | Caps how many artists share one batched cross-attention forward. `0` = no cap. Set `2-8` to bound peak VRAM with many artists at high resolution instead of falling back to slow sequential mode |
 | `low_vram_cache` (v26) | Stores static-capture and anchor caches in system RAM instead of VRAM. Saves hundreds of MB at high resolution for a small per-step transfer cost |
+| `match_base_norm` (v26) | Rescales the mixed artist attention output to the base output's per-row RMS energy (clamped to 0.5–2.0×) before fusion. The artist mixture's activation energy can differ from what downstream blocks expect; the mismatch compounds across layers and shows up as seed-dependent style-strength swings (style drift). Direction (= style) is preserved, only magnitude is corrected. Default on; disable to reproduce pre-v26 behavior exactly. Applies to `interpolate` / `base_preserve`; `lowrank_avg` is already delta-anchored to base and is unaffected |
 
 ### AnimaArtistRecipeSave / AnimaArtistRecipeLoad (v26, sharing)
 
