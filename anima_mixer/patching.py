@@ -29,6 +29,37 @@ def unwrap_cross_attn(ca):
     return ca
 
 
+class CrossAttnForwardPatch:
+    """Callable object patch for ``cross_attn.forward``.
+
+    Replacing the full attention module registers the wrapped module under a
+    new ``.original`` state-dict path. ComfyUI can then try to restore keys like
+    ``cross_attn.original.*`` after the wrapper has been removed. Patching only
+    ``forward`` keeps the original module in the model tree, so parameter names
+    and object-patch backups stay stable across sampler branches.
+    """
+
+    _anima_artist_mixer_forward_patch = True
+
+    def __init__(self, wrapper):
+        self.wrapper = wrapper
+        self.original_forward = wrapper.original
+
+    def __call__(self, *args, **kwargs):
+        return self.wrapper.forward(*args, **kwargs)
+
+
+def unwrap_cross_attn_forward(ca):
+    forward = getattr(ca, "forward", None)
+    while isinstance(forward, CrossAttnForwardPatch):
+        forward = forward.original_forward
+    return forward
+
+
+def make_cross_attn_forward_patch(wrapper):
+    return CrossAttnForwardPatch(wrapper)
+
+
 def validate_model(diffusion_model):
     if not hasattr(diffusion_model, "blocks"):
         return False, 0, 0, f"{type(diffusion_model).__name__} has no .blocks"

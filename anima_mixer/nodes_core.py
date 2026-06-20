@@ -23,8 +23,8 @@ from .constants import (
     NORM_LOCK_SCOPE_PER_ARTIST,
     NORM_LOCK_TOKEN,
     MAX_ARTISTS,
-    PRESET_CHOICES,
-    PRESET_DRIFT_AUTO,
+    PRESET_BALANCED,
+    PRESET_RECOMMENDED_CHOICES,
     STATIC_CAPTURE_BLEND_ALPHA_DEFAULT,
     STATIC_CAPTURE_K_DEFAULT,
     STATIC_CAPTURE_K_MAX,
@@ -41,10 +41,11 @@ from .parsing import (
     split_artist_chain,
 )
 from .patching import (
-    cleanup_residual_wrappers,
     describe_external_cross_attn_patches,
     extract_conditioning,
+    make_cross_attn_forward_patch,
     unwrap_cross_attn,
+    unwrap_cross_attn_forward,
     validate_model,
 )
 from .wrapper import CrossAttnWrapper
@@ -213,9 +214,15 @@ class AnimaArtistBasic:
                     "default": "",
                     "tooltip": "Main positive prompt. Do not repeat artist names here.",
                 }),
-                "preset": (PRESET_CHOICES, {
-                    "default": PRESET_DRIFT_AUTO,
-                    "tooltip": "Recommended: keep drift_auto unless you need a specific route.",
+                "preset": (PRESET_RECOMMENDED_CHOICES, {
+                    "default": PRESET_BALANCED,
+                    "tooltip": (
+                        "Recommended modes only. Use Anima Artist Preset for "
+                        "advanced modes.\n"
+                        "balanced: original-compatible default\n"
+                        "strong_style: stronger artist style\n"
+                        "drift_auto: automatic low-drift route"
+                    ),
                 }),
                 "intensity": ("FLOAT", {
                     "default": 1.0, "min": 0.0, "max": 2.0, "step": 0.05,
@@ -327,7 +334,7 @@ def _build_runtime_state(enabled, fusion_mode, combine_mode, strength,
         "anchor_refresh_each_step": bool(adv.get("anchor_refresh_each_step", False)),
         "max_batch_artists": int(adv.get("max_batch_artists", 0) or 0),
         "low_vram_cache": bool(adv.get("low_vram_cache", False)),
-        "match_base_norm": bool(adv.get("match_base_norm", True)),
+        "match_base_norm": bool(adv.get("match_base_norm", False)),
         "anchor_base_norm_ref": bool(adv.get("anchor_base_norm_ref", False)),
         "norm_lock_mode": str(adv.get("norm_lock_mode", NORM_LOCK_TOKEN)),
         "norm_lock_scope": str(adv.get("norm_lock_scope", NORM_LOCK_SCOPE_PER_ARTIST)),
@@ -586,8 +593,6 @@ class AnimaArtistCrossAttn:
         except Exception:
             dm = model.model.diffusion_model
 
-        cleanup_residual_wrappers(dm)
-
         ok, num_blocks, ctx_dim, msg = validate_model(dm)
         if not ok:
             raise ValueError(f"[AnimaCrossAttn] unsupported model: {msg}")
@@ -683,9 +688,22 @@ class AnimaArtistCrossAttn:
             m.set_model_unet_function_wrapper(make_sigma_capture(state, prev))
 
         for i in target_blocks:
-            inner = unwrap_cross_attn(dm.blocks[i].cross_attn)
+            ca = dm.blocks[i].cross_attn
+            current_forward = getattr(ca, 'forward', None)
+
+            # Check if already patched by this code (handles multiple sampler workflows)
+            if hasattr(current_forward, '_anima_artist_mixer_forward_patch'):
+                # Already patched - unwrap to get the true original
+                inner = unwrap_cross_attn_forward(ca)
+            else:
+                # Not yet patched - proceed normally
+                inner = unwrap_cross_attn_forward(unwrap_cross_attn(ca))
+
             wrapper = CrossAttnWrapper(inner, state, i)
-            m.add_object_patch(f"diffusion_model.blocks.{i}.cross_attn", wrapper)
+            m.add_object_patch(
+                f"diffusion_model.blocks.{i}.cross_attn.forward",
+                make_cross_attn_forward_patch(wrapper),
+            )
 
         return (m, base_cond_out)
 
@@ -754,7 +772,6 @@ class AnimaArtistProbe:
         except Exception:
             dm = model.model.diffusion_model
 
-        cleanup_residual_wrappers(dm)
         ok, num_blocks, _, msg = validate_model(dm)
         if not ok:
             raise ValueError(f"[AnimaArtistProbe] unsupported model: {msg}")
@@ -780,9 +797,12 @@ class AnimaArtistProbe:
         prev = m.model_options.get("model_function_wrapper")
         m.set_model_unet_function_wrapper(make_sigma_capture(state, prev))
         for i in range(num_blocks):
-            inner = unwrap_cross_attn(dm.blocks[i].cross_attn)
+            inner = unwrap_cross_attn_forward(unwrap_cross_attn(dm.blocks[i].cross_attn))
             wrapper = _ProbeCrossAttnWrapper(inner, state, i)
-            m.add_object_patch(f"diffusion_model.blocks.{i}.cross_attn", wrapper)
+            m.add_object_patch(
+                f"diffusion_model.blocks.{i}.cross_attn.forward",
+                make_cross_attn_forward_patch(wrapper),
+            )
 
         _registry_store(probe_id, state)
         logger.info(

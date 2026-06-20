@@ -149,6 +149,76 @@ class _KVMeanAttn(torch.nn.Module):
         return mean.expand(x.shape[0], x.shape[1], context.shape[-1])
 
 
+class _TinyAttention(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.proj = torch.nn.Linear(2, 2, bias=False)
+        self.context_dim = 2
+
+    def forward(self, x, context=None, rope_emb=None, transformer_options=None):
+        return self.proj(x)
+
+
+class _TinyBlock(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.cross_attn = _TinyAttention()
+
+
+class _TinyDiffusion(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.blocks = torch.nn.ModuleList([_TinyBlock()])
+
+
+class ForwardPatchSafetyTest(unittest.TestCase):
+    def test_forward_patch_keeps_state_dict_paths_stable(self):
+        dm = _TinyDiffusion()
+        original_keys = set(dm.state_dict())
+        attn = dm.blocks[0].cross_attn
+
+        wrapper = CrossAttnWrapper(attn.forward, {"enabled": False}, 0)
+        attn.forward = patching.make_cross_attn_forward_patch(wrapper)
+
+        self.assertEqual(set(dm.state_dict()), original_keys)
+        self.assertNotIn("blocks.0.cross_attn.original.proj.weight", dm.state_dict())
+
+    def test_full_module_wrapper_would_register_original_submodule(self):
+        dm = _TinyDiffusion()
+        attn = dm.blocks[0].cross_attn
+
+        dm.blocks[0].cross_attn = CrossAttnWrapper(attn, {"enabled": False}, 0)
+
+        self.assertIn("blocks.0.cross_attn.original.proj.weight", dm.state_dict())
+
+    def test_forward_patch_can_be_unwrapped_to_original_forward(self):
+        attn = _TinyAttention()
+        original_forward = attn.forward
+        wrapper = CrossAttnWrapper(original_forward, {"enabled": False}, 0)
+        attn.forward = patching.make_cross_attn_forward_patch(wrapper)
+
+        self.assertIs(patching.unwrap_cross_attn_forward(attn), original_forward)
+
+    def test_repatching_forward_unwraps_without_state_dict_pollution(self):
+        dm = _TinyDiffusion()
+        attn = dm.blocks[0].cross_attn
+        original_forward = attn.forward
+        original_keys = set(dm.state_dict())
+
+        first_wrapper = CrossAttnWrapper(original_forward, {"enabled": False}, 0)
+        attn.forward = patching.make_cross_attn_forward_patch(first_wrapper)
+        second_wrapper = CrossAttnWrapper(
+            patching.unwrap_cross_attn_forward(attn),
+            {"enabled": False},
+            0,
+        )
+        attn.forward = patching.make_cross_attn_forward_patch(second_wrapper)
+
+        self.assertIs(patching.unwrap_cross_attn_forward(attn), original_forward)
+        self.assertEqual(set(dm.state_dict()), original_keys)
+        self.assertNotIn("blocks.0.cross_attn.original.proj.weight", dm.state_dict())
+
+
 class WrapperHelpersTest(unittest.TestCase):
     def _wrapper(self, state=None):
         return CrossAttnWrapper(torch.nn.Identity(), state or {}, 0)

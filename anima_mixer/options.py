@@ -127,7 +127,7 @@ def base_advanced_options():
         "compatibility_mode": False,
         "max_batch_artists": 0,
         "low_vram_cache": False,
-        "match_base_norm": True,
+        "match_base_norm": False,
         "anchor_base_norm_ref": False,
         "norm_lock_mode": NORM_LOCK_TOKEN,
         "norm_lock_scope": NORM_LOCK_SCOPE_PER_ARTIST,
@@ -169,7 +169,8 @@ def build_preset_payload(preset_name, intensity=1.0, layer_mode=LAYER_MODE_AUTO,
     }
 
     if preset_name == PRESET_BALANCED:
-        adv["artist_ema_alpha"] = 0.25
+        adv["artist_ema_alpha"] = 0.0
+        adv["match_base_norm"] = False
         payload["strength"] = 1.0
     elif preset_name == PRESET_STRONG_STYLE:
         adv["artist_ema_alpha"] = 0.20
@@ -324,14 +325,15 @@ def merge_runtime_options(combine_mode, fusion_mode, strength,
                           artist_count=0):
     adv = {}
     preset_name = None
+    resolved_preset_name = None
     if isinstance(preset, dict):
         preset_name = preset.get("preset")
         if preset_name == PRESET_DRIFT_AUTO:
-            resolved_name, reason = resolve_drift_auto_preset(
+            resolved_preset_name, reason = resolve_drift_auto_preset(
                 base_prompt, artist_count,
             )
             resolved = build_preset_payload(
-                resolved_name,
+                resolved_preset_name,
                 preset.get("intensity", 1.0),
                 preset.get("layer_mode", LAYER_MODE_AUTO),
                 preset.get("custom_layer_filter", ""),
@@ -339,10 +341,10 @@ def merge_runtime_options(combine_mode, fusion_mode, strength,
                 artist_count=artist_count,
             )
             adv.update(resolved.get("advanced_options") or {})
-            if resolved_name == PRESET_STABLE_SEED and "delta-cap" in reason:
+            if resolved_preset_name == PRESET_STABLE_SEED and "delta-cap" in reason:
                 adv["mixed_delta_cap"] = True
                 adv["mixed_delta_cap_ratio"] = DRIFT_AUTO_CLOSEUP_DELTA_CAP_RATIO
-            adv["drift_auto_resolved_preset"] = resolved_name
+            adv["drift_auto_resolved_preset"] = resolved_preset_name
             adv["drift_auto_reason"] = reason
             combine_mode = resolved.get("combine_mode", combine_mode)
             fusion_mode = resolved.get("fusion_mode", fusion_mode)
@@ -355,7 +357,10 @@ def merge_runtime_options(combine_mode, fusion_mode, strength,
     if isinstance(advanced_options, dict):
         if not (preset_name == PRESET_DRIFT_AUTO and advanced_options.get("drift_auto_pending")):
             adv.update(advanced_options)
-    if preset_name in (PRESET_COMPATIBILITY_SAFE, PRESET_COMPATIBILITY_SAFE_9_15):
+    if (
+        preset_name in (PRESET_COMPATIBILITY_SAFE, PRESET_COMPATIBILITY_SAFE_9_15)
+        or resolved_preset_name in (PRESET_COMPATIBILITY_SAFE, PRESET_COMPATIBILITY_SAFE_9_15)
+    ):
         adv["compatibility_mode"] = True
     combine_mode, fusion_mode, strength, adv = apply_compatibility_mode(
         combine_mode, fusion_mode, strength, adv,

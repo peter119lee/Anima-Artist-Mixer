@@ -1,0 +1,47 @@
+{
+  "test": "current PR Preset balanced two-KSampler same-model smoke, 1024x1024, 32 steps",
+  "server": "http://127.0.0.1:8190",
+  "prompt_id": "1dcffaf6-4e5b-41ce-920b-d23e41835b25",
+  "status": "success",
+  "object_info": {
+    "AnimaArtistCrossAttn.python_module": "custom_nodes.Anima-Artist-Mixer",
+    "AnimaArtistCrossAttn.optional": [
+      "advanced_options",
+      "preset"
+    ],
+    "AnimaArtistPreset.display_name": "Anima Artist Preset (One Knob)"
+  },
+  "settings": {
+    "width": 1024,
+    "height": 1024,
+    "steps": 32,
+    "cfg": 5.0,
+    "sampler": "er_sde",
+    "scheduler": "beta",
+    "seed": 1098716302142360,
+    "preset": "balanced",
+    "layer_mode": "all_layers",
+    "combine_mode": "output_avg",
+    "fusion_mode": "interpolate",
+    "strength": 1.0
+  },
+  "outputs": {
+    "preset_mixer": "I:\\ComfyUI-aki-v1.6\\ComfyUI\\output\\pr4_current_preset_two_sampler_1024_32_mixer_00001_.png",
+    "prompt_no_mixer": "I:\\ComfyUI-aki-v1.6\\ComfyUI\\output\\pr4_current_preset_two_sampler_1024_32_prompt_00001_.png",
+    "contact_sheet": "L:\\Antigravitiy code\\comfyui\\Anima-Artist-Mixer\\pr_evidence\\compare-1024-32-preset-two-sampler-yuchi.png"
+  },
+  "comparisons": {
+    "preset_mixer_vs_current_no_preset_mixer": {
+      "mae_0_255": 0.0,
+      "mae_0_1": 0.0,
+      "rms_0_255": 0.0,
+      "max_delta": 0
+    },
+    "preset_prompt_vs_existing_prompt": {
+      "mae_0_255": 0.0,
+      "mae_0_1": 0.0,
+      "rms_0_255": 0.0,
+      "max_delta": 0
+    }
+  }
+}

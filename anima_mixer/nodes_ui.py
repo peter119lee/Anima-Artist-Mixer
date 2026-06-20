@@ -32,6 +32,7 @@ from .constants import (
     PRESET_BALANCED,
     PRESET_CHOICES,
     PRESET_DRIFT_AUTO,
+    PRESET_RECOMMENDED_CHOICES,
     STATIC_CAPTURE_BLEND_ALPHA_DEFAULT,
     STATIC_CAPTURE_K_DEFAULT,
     STATIC_CAPTURE_K_MAX,
@@ -43,6 +44,7 @@ from .constants import (
 from .options import (
     build_preset_payload,
     format_bool,
+    layer_filter_for_mode,
     merge_runtime_options,
 )
 from .parsing import resolve_target_blocks_from_options, split_artist_chain
@@ -172,6 +174,61 @@ class AnimaArtistChainPreview:
     def preview(self, artist_chain, num_blocks=DEFAULT_NUM_BLOCKS):
         cleaned, report = format_artist_chain_preview(artist_chain, int(num_blocks))
         return {"ui": {"text": [report]}, "result": (cleaned, report)}
+
+
+class AnimaArtistSimpleOptions:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "normalize_weights": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": (
+                        "Recommended on. If artist_chain uses ::weight syntax, "
+                        "explicit weights stay absolute at runtime."
+                    ),
+                }),
+                "layer_mode": (LAYER_MODE_CHOICES, {
+                    "default": LAYER_MODE_AUTO,
+                    "tooltip": "Global layer shortcut. Keep auto/all unless you need a narrower range.",
+                }),
+                "start_percent": ("FLOAT", {
+                    "default": 0.0, "min": 0.0, "max": 1.0, "step": 0.001,
+                    "tooltip": "Sampling-progress start. 0.0 = beginning.",
+                }),
+                "end_percent": ("FLOAT", {
+                    "default": 1.0, "min": 0.0, "max": 1.0, "step": 0.001,
+                    "tooltip": "Sampling-progress end. 1.0 = end.",
+                }),
+                "custom_layer_filter": ("STRING", {
+                    "default": "",
+                    "multiline": False,
+                    "tooltip": "Used only when layer_mode=custom. Example: 0,3,5-10,-1",
+                }),
+                "compatibility_mode": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": (
+                        "Enable only when regional prompts or another attention "
+                        "patcher conflicts with the mixer."
+                    ),
+                }),
+            },
+        }
+
+    RETURN_TYPES = ("ANIMA_OPTS",)
+    RETURN_NAMES = ("advanced_options",)
+    FUNCTION = "build"
+    CATEGORY = "Anima/CrossAttn"
+
+    def build(self, normalize_weights, layer_mode, start_percent, end_percent,
+              custom_layer_filter="", compatibility_mode=False):
+        return ({
+            "normalize_weights": bool(normalize_weights),
+            "layer_filter": layer_filter_for_mode(layer_mode, custom_layer_filter),
+            "start_percent": float(start_percent),
+            "end_percent": float(end_percent),
+            "compatibility_mode": bool(compatibility_mode),
+        },)
 
 
 class AnimaArtistOptions:
@@ -365,13 +422,13 @@ class AnimaArtistOptions:
                     ),
                 }),
                 "match_base_norm": ("BOOLEAN", {
-                    "default": True,
+                    "default": False,
                     "tooltip": (
                         "Rescale the mixed artist attention output to the base "
                         "output's RMS energy (clamped to 0.5-2.0x).\n"
                         "Keeps the style direction but stops activation-energy "
-                        "mismatch from compounding across layers. Disable to "
-                        "reproduce pre-v26 behavior exactly."
+                        "mismatch from compounding across layers. Enable this "
+                        "explicitly when you want v26 norm-lock stabilization."
                     ),
                 }),
                 "anchor_base_norm_ref": ("BOOLEAN", {
@@ -459,7 +516,7 @@ class AnimaArtistOptions:
               anchor_deep_layer_threshold=ANCHOR_LAYER_THRESHOLD_DISABLED,
               anchor_refresh_each_step=False,
               layer_filter="", compatibility_mode=False,
-              max_batch_artists=0, low_vram_cache=False, match_base_norm=True,
+              max_batch_artists=0, low_vram_cache=False, match_base_norm=False,
               anchor_base_norm_ref=False,
               norm_lock_mode=NORM_LOCK_TOKEN,
               norm_lock_scope=NORM_LOCK_SCOPE_PER_ARTIST,
@@ -507,8 +564,8 @@ class AnimaArtistPreset:
                 "preset": (PRESET_CHOICES, {
                     "default": PRESET_BALANCED,
                     "tooltip": (
-                        "One-knob working modes.\n"
-                        "balanced: recommended default, light EMA\n"
+                        "Advanced one-knob working modes.\n"
+                        "balanced: original-style output_avg + interpolate\n"
                         "strong_style: stronger style, strength extrapolated to 1.65\n"
                         "stable_seed: static-capture no-norm, auto layers 9-20, content-safer seed stability\n"
                         "drift_auto: runtime route from base_prompt and artist count; "
@@ -579,7 +636,7 @@ class AnimaArtistPreset:
             f"static_capture_k: {int(adv.get('static_capture_k', STATIC_CAPTURE_K_DEFAULT))}",
             f"static_capture_mode: {adv.get('static_capture_mode', STATIC_CAPTURE_MODE_OUTPUT)}",
             f"static_capture_blend_alpha: {float(adv.get('static_capture_blend_alpha', STATIC_CAPTURE_BLEND_ALPHA_DEFAULT)):.2f}",
-            f"match_base_norm: {format_bool(adv.get('match_base_norm', True))}",
+            f"match_base_norm: {format_bool(adv.get('match_base_norm', False))}",
             f"norm_lock_mode: {adv.get('norm_lock_mode', NORM_LOCK_TOKEN)}",
             f"norm_lock_scope: {adv.get('norm_lock_scope', NORM_LOCK_SCOPE_PER_ARTIST)}",
             f"mixed_delta_cap: {format_bool(adv.get('mixed_delta_cap', False))}",
@@ -602,23 +659,14 @@ class AnimaArtistStarter:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "recipe": (PRESET_CHOICES, {
+                "recipe": (PRESET_RECOMMENDED_CHOICES, {
                     "default": PRESET_BALANCED,
                     "tooltip": (
-                        "Pick the goal first.\n"
-                        "balanced: safe default starting point\n"
-                        "strong_style: stronger style\n"
-                        "stable_seed: content-safer cross-seed stability\n"
-                        "drift_auto: auto-select low-drift route from base_prompt and artist count; "
-                        "4+ portrait uses compatibility_safe_9_15, street uses compatibility_safe\n"
-                        "drift_soft: softer portrait / broad-subject stability\n"
-                        "face_lock: close-up face stability with base_preserve\n"
-                        "scene_lock: wide / background-heavy scene stability\n"
-                        "anchor_lock: stronger anchor-Q seed lock\n"
-                        "fast_preview: fast image hunting\n"
-                        "identity_guard: protect subject/composition\n"
-                        "compatibility_safe: when regional prompting or other "
-                        "attention patch nodes are present"
+                        "Recommended modes only. Use Anima Artist Preset for "
+                        "advanced / compatibility modes.\n"
+                        "balanced: original-compatible default\n"
+                        "strong_style: stronger artist style\n"
+                        "drift_auto: automatic low-drift route"
                     ),
                 }),
                 "artist_table": ("STRING", {
@@ -711,7 +759,7 @@ class AnimaArtistStarter:
             f"  combine_mode: {payload['combine_mode']}",
             f"  fusion_mode: {payload['fusion_mode']}",
             f"  strength: {float(payload['strength']):.2f}",
-            f"  match_base_norm: {format_bool(adv.get('match_base_norm', True))}",
+            f"  match_base_norm: {format_bool(adv.get('match_base_norm', False))}",
             f"  norm_lock_mode: {adv.get('norm_lock_mode', NORM_LOCK_TOKEN)}",
             f"  norm_lock_scope: {adv.get('norm_lock_scope', NORM_LOCK_SCOPE_PER_ARTIST)}",
             f"  mixed_delta_cap: {format_bool(adv.get('mixed_delta_cap', False))}",
@@ -846,7 +894,7 @@ class AnimaArtistInspector:
             f"anchor_q: {format_bool(adv.get('artist_anchor_q', False))}",
             f"max_batch_artists: {int(adv.get('max_batch_artists', 0) or 0) or 'unlimited'}",
             f"low_vram_cache: {format_bool(adv.get('low_vram_cache', False))}",
-            f"match_base_norm: {format_bool(adv.get('match_base_norm', True))}",
+            f"match_base_norm: {format_bool(adv.get('match_base_norm', False))}",
             f"norm_lock_mode: {adv.get('norm_lock_mode', NORM_LOCK_TOKEN)}",
             f"norm_lock_scope: {adv.get('norm_lock_scope', NORM_LOCK_SCOPE_PER_ARTIST)}",
             f"contribution_balance: {format_bool(adv.get('contribution_balance', False))}",

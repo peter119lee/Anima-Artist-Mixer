@@ -2,9 +2,27 @@
 
 ## v26.0.0 (2026-06-11)
 
+### 2026-06-19 PR feedback fixes
+- Patched cross-attention at the `cross_attn.forward` object-patch level
+  instead of replacing the full attention module. This keeps state-dict
+  paths stable and fixes multi-sampler workflows that compare patched and
+  unpatched branches from the same loaded model.
+- Kept `balanced` on the original `output_avg + interpolate` design for both
+  single-artist and multi-artist chains. Use `compatibility_safe` explicitly
+  when a workflow needs the `concat + concat_with_base` path.
+- Restored original-like `balanced` defaults by leaving EMA and norm-lock
+  disabled. `match_base_norm` remains available as an explicit stabilizer and
+  in presets that intentionally use it, such as `face_lock`.
+- Added `AnimaArtistSimpleOptions` for the common layer/timing/compatibility
+  controls, leaving the full `AnimaArtistOptions` node as an expert/debug
+  surface so existing workflows keep working without overwhelming new ones.
+- Changed `AnimaArtistBasic` and the example workflow to default to
+  `balanced` instead of `drift_auto`; automatic low-drift routing remains
+  available, but the default product path is predictable artist mixing.
+
 ### 2026-06-16 workflow simplification
-- Added `AnimaArtistBasic`, a minimal recommended entry point that wraps
-  `Pack + Preset + CrossAttn` with `preset = drift_auto` by default.
+- Added `AnimaArtistBasic`, a minimal entry point that wraps
+  `Pack + Preset + CrossAttn`.
 - Added a complete example workflow at
   `workflow/Shift testing.before-basic-simplify.json` and documented it in
   README / USAGE as a direct importable example.
@@ -48,9 +66,9 @@
   `wlop%0.0-0.45~0.1`.
 - **Negative weights (style subtraction)** — `::artist::-0.5` pushes a
   style away instead of adding it. Weight range is now [-4, 4].
-- **`match_base_norm` option (default on)** — rescales artist attention
-  output to the base output's RMS energy before fusion. v26 now defaults
-  to token-level, per-artist norm locking (`norm_lock_mode=token`,
+- **`match_base_norm` option (explicit stabilizer)** — rescales artist attention
+  output to the base output's RMS energy before fusion. When enabled, v26 uses
+  token-level, per-artist norm locking (`norm_lock_mode=token`,
   `norm_lock_scope=per_artist`) so each artist is calibrated before the
   weighted mix. This suppresses seed-specific high-energy artist spikes
   more aggressively than the legacy whole-row final-output lock while
@@ -92,12 +110,13 @@
   reference instead of the current seed's base output.
 - **`contribution_balance` option** — optional per-artist delta equalizer
   for dominance flips. It is available for A/B work but stays off by default;
-  live multi-seed checks favored static capture as the safer default.
+  live multi-seed checks favored static capture as the safer opt-in route for
+  low-drift presets.
 - **`mixed_delta_cap` option** — optional inference-time limiter for the final
   mixed artist delta before `interpolate` / `base_preserve` fusion. It caps
   effective artist-delta RMS against base RMS after strength is considered,
   giving live A/B a direct way to test lower drift without training or changing
-  the default `drift_auto` route.
+  the scene-tuned `drift_auto` routes.
 - **`static_capture_mode=blend_perp`** — added an advanced experimental
   mode that reintroduces only base motion perpendicular to the frozen style
   delta. Live A/B showed a narrow scene win, but not a stable cross-scene

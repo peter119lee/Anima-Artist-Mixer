@@ -1770,7 +1770,7 @@
     {
       "id": 45,
       "type": "AnimaArtistBasic",
-      "title": "Recommended: artist mix + drift_auto",
+      "title": "Recommended: artist mix + balanced",
       "pos": [
         1040,
         1020
@@ -1872,7 +1872,7 @@
       "widgets_values": [
         ", @satou kibi, @wanke:0.8, @[ningen mame|haku89|wanke|mika pikazo],",
         "masterpiece, score_9, year 2025, highres, nsfw, 1girl, dark, blue theme, (purple theme:0.7),\n\n, kindergarten uniform,blush,open mouth,1boy,grabbing,long hair,yellow skirt,blue shirt,crime prevention buzzer,grabbing from behind,long sleeves,smile,bag,grabbing another's breast,pleated skirt,+++,shoulder bag,flat chest grab,flat chest,upper teeth only,tickling,hetero,cowboy shot,tears,tearing up,laughing,miniskirt,\n\n, sparkle \\(honkai: star rail\\), honkai \\(series\\), 1girl, pink eyes, red eyes, black hair, very long hair, brown hair, long hair, twintails, medium breasts, thighs, mask on head, fox mask, black gloves, bare shoulders, black choker, ",
-        "drift_auto",
+        "balanced",
         1,
         true
       ],

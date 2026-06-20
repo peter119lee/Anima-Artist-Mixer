@@ -14,9 +14,11 @@ from anima_mixer.nodes_core import AnimaArtistBasic  # noqa: E402
 from anima_mixer.nodes_ui import (  # noqa: E402
     AnimaArtistChainBuilder,
     AnimaArtistInspector,
+    AnimaArtistOptions,
     AnimaArtistPreset,
     AnimaArtistRecipeLoad,
     AnimaArtistRecipeSave,
+    AnimaArtistSimpleOptions,
     AnimaArtistStarter,
 )
 
@@ -137,6 +139,7 @@ class ArtistRoutingHelpersTest(unittest.TestCase):
         self.assertEqual(adv["norm_lock_scope"], constants.NORM_LOCK_SCOPE_PER_ARTIST)
         self.assertFalse(adv["contribution_balance"])
         self.assertFalse(adv["mixed_delta_cap"])
+        self.assertFalse(adv["match_base_norm"])
         self.assertAlmostEqual(
             adv["mixed_delta_cap_ratio"],
             constants.MIXED_DELTA_CAP_RATIO_DEFAULT,
@@ -146,6 +149,101 @@ class ArtistRoutingHelpersTest(unittest.TestCase):
             adv["contribution_balance_alpha"],
             constants.CONTRIB_BALANCE_ALPHA_DEFAULT,
         )
+
+    def test_simple_options_keeps_default_surface_small(self):
+        inputs = AnimaArtistSimpleOptions.INPUT_TYPES()
+        visible_count = sum(len(group) for group in inputs.values())
+
+        self.assertLessEqual(visible_count, 6)
+        self.assertIn("layer_mode", inputs["required"])
+        self.assertNotIn("artist_anchor_q", inputs["required"])
+        self.assertNotIn("match_base_norm", inputs.get("optional", {}))
+
+    def test_simple_options_builds_original_style_payload(self):
+        adv = AnimaArtistSimpleOptions().build(
+            True,
+            constants.LAYER_MODE_STYLE_CORE,
+            0.1,
+            0.9,
+            "",
+            False,
+        )[0]
+
+        self.assertTrue(adv["normalize_weights"])
+        self.assertEqual(adv["layer_filter"], "0-18")
+        self.assertAlmostEqual(adv["start_percent"], 0.1)
+        self.assertAlmostEqual(adv["end_percent"], 0.9)
+        self.assertFalse(adv["compatibility_mode"])
+        self.assertNotIn("artist_ema_alpha", adv)
+        self.assertNotIn("artist_static_capture", adv)
+        self.assertNotIn("artist_anchor_q", adv)
+        self.assertNotIn("match_base_norm", adv)
+
+    def test_simple_options_preserves_preset_stabilizers_when_merged(self):
+        simple = AnimaArtistSimpleOptions().build(
+            True,
+            constants.LAYER_MODE_STYLE_CORE,
+            0.1,
+            0.9,
+            "",
+            False,
+        )[0]
+        preset = options.build_preset_payload(constants.PRESET_FACE_LOCK)
+
+        _, _, _, adv, preset_name = options.merge_runtime_options(
+            constants.COMBINE_OUTPUT_AVG,
+            constants.FUSION_INTERPOLATE,
+            1.0,
+            advanced_options=simple,
+            preset=preset,
+            base_prompt="close-up portrait",
+            artist_count=1,
+        )
+
+        self.assertEqual(preset_name, constants.PRESET_FACE_LOCK)
+        self.assertTrue(adv["artist_static_capture"])
+        self.assertTrue(adv["match_base_norm"])
+        self.assertEqual(adv["layer_filter"], "0-18")
+        self.assertAlmostEqual(adv["start_percent"], 0.1)
+        self.assertAlmostEqual(adv["end_percent"], 0.9)
+
+    def test_simple_options_preserves_drift_auto_compatibility_route(self):
+        simple = AnimaArtistSimpleOptions().build(
+            True,
+            constants.LAYER_MODE_AUTO,
+            0.0,
+            1.0,
+            "",
+            False,
+        )[0]
+        preset = options.build_preset_payload(constants.PRESET_DRIFT_AUTO)
+
+        combine_mode, fusion_mode, strength, adv, preset_name = options.merge_runtime_options(
+            constants.COMBINE_OUTPUT_AVG,
+            constants.FUSION_INTERPOLATE,
+            1.0,
+            advanced_options=simple,
+            preset=preset,
+            base_prompt="portrait, upper body",
+            artist_count=4,
+        )
+
+        self.assertEqual(preset_name, constants.PRESET_DRIFT_AUTO)
+        self.assertEqual(adv["drift_auto_resolved_preset"], constants.PRESET_COMPATIBILITY_SAFE_9_15)
+        self.assertTrue(adv["compatibility_mode"])
+        self.assertEqual(combine_mode, constants.COMBINE_CONCAT)
+        self.assertEqual(fusion_mode, constants.FUSION_CONCAT_WITH_BASE)
+        self.assertAlmostEqual(strength, 1.0)
+
+    def test_advanced_options_node_still_exposes_expert_controls(self):
+        inputs = AnimaArtistOptions.INPUT_TYPES()
+        required = inputs["required"]
+        optional = inputs["optional"]
+
+        self.assertIn("artist_anchor_q", required)
+        self.assertIn("static_capture_mode", required)
+        self.assertIn("match_base_norm", optional)
+        self.assertIn("mixed_delta_cap", optional)
 
     def test_stable_seed_preset_uses_static_capture_path(self):
         payload = options.build_preset_payload(constants.PRESET_STABLE_SEED)
@@ -165,6 +263,30 @@ class ArtistRoutingHelpersTest(unittest.TestCase):
         self.assertFalse(payload["advanced_options"]["anchor_base_norm_ref"])
         self.assertFalse(payload["advanced_options"]["contribution_balance"])
         self.assertEqual(payload["advanced_options"]["layer_filter"], "9-20")
+
+    def test_balanced_single_artist_keeps_original_output_avg_path(self):
+        payload = options.build_preset_payload(
+            constants.PRESET_BALANCED,
+            artist_count=1,
+        )
+
+        self.assertEqual(payload["combine_mode"], constants.COMBINE_OUTPUT_AVG)
+        self.assertEqual(payload["fusion_mode"], constants.FUSION_INTERPOLATE)
+        self.assertFalse(payload["advanced_options"]["compatibility_mode"])
+        self.assertAlmostEqual(payload["advanced_options"]["artist_ema_alpha"], 0.0)
+        self.assertFalse(payload["advanced_options"]["match_base_norm"])
+
+    def test_balanced_multi_artist_keeps_output_avg_path(self):
+        payload = options.build_preset_payload(
+            constants.PRESET_BALANCED,
+            artist_count=2,
+        )
+
+        self.assertEqual(payload["combine_mode"], constants.COMBINE_OUTPUT_AVG)
+        self.assertEqual(payload["fusion_mode"], constants.FUSION_INTERPOLATE)
+        self.assertFalse(payload["advanced_options"]["compatibility_mode"])
+        self.assertAlmostEqual(payload["advanced_options"]["artist_ema_alpha"], 0.0)
+        self.assertFalse(payload["advanced_options"]["match_base_norm"])
 
     def test_drift_soft_preset_uses_soft_static_capture_path(self):
         payload = options.build_preset_payload(constants.PRESET_DRIFT_SOFT)
@@ -316,7 +438,6 @@ class ArtistRoutingHelpersTest(unittest.TestCase):
         self.assertEqual(fusion_mode, constants.FUSION_INTERPOLATE)
         self.assertAlmostEqual(strength, 1.0)
         self.assertFalse(adv["match_base_norm"])
-        self.assertTrue(adv["mixed_delta_cap"])
         self.assertAlmostEqual(adv["mixed_delta_cap_ratio"], 0.75)
 
     def test_drift_auto_many_artist_plain_portrait_uses_compatibility_safe(self):
@@ -879,14 +1000,14 @@ class RecipeTest(unittest.TestCase):
         adv["mixed_delta_cap_ratio"] = 0.75
         text = recipe.serialize_recipe(
             "wlop, ::krenz::0.8", constants.COMBINE_LOWRANK_AVG,
-            constants.FUSION_BASE_PRESERVE, 1.4, adv, notes="my mix",
+            constants.FUSION_INTERPOLATE, 1.4, adv, notes="my mix",
         )
         payload, warnings = recipe.deserialize_recipe(text)
 
         self.assertEqual(warnings, [])
         self.assertEqual(payload["artist_chain"], "wlop, ::krenz::0.8")
         self.assertEqual(payload["combine_mode"], constants.COMBINE_LOWRANK_AVG)
-        self.assertEqual(payload["fusion_mode"], constants.FUSION_BASE_PRESERVE)
+        self.assertEqual(payload["fusion_mode"], constants.FUSION_INTERPOLATE)
         self.assertAlmostEqual(payload["strength"], 1.4)
         self.assertEqual(payload["advanced_options"]["artist_ema_alpha"], 0.25)
         self.assertTrue(payload["advanced_options"]["low_vram_cache"])
@@ -927,7 +1048,7 @@ class RecipeTest(unittest.TestCase):
 
 
 class RegistryTest(unittest.TestCase):
-    def test_basic_node_is_small_drift_auto_entrypoint(self):
+    def test_basic_node_is_small_balanced_entrypoint(self):
         inputs = AnimaArtistBasic.INPUT_TYPES()["required"]
 
         self.assertEqual(list(inputs), [
@@ -939,7 +1060,21 @@ class RegistryTest(unittest.TestCase):
             "intensity",
             "enabled",
         ])
-        self.assertEqual(inputs["preset"][1]["default"], constants.PRESET_DRIFT_AUTO)
+        self.assertEqual(inputs["preset"][1]["default"], constants.PRESET_BALANCED)
+        self.assertEqual(inputs["preset"][0], constants.PRESET_RECOMMENDED_CHOICES)
+
+    def test_starter_uses_recommended_presets_only(self):
+        inputs = AnimaArtistStarter.INPUT_TYPES()["required"]
+
+        self.assertEqual(inputs["recipe"][1]["default"], constants.PRESET_BALANCED)
+        self.assertEqual(inputs["recipe"][0], constants.PRESET_RECOMMENDED_CHOICES)
+
+    def test_preset_node_keeps_advanced_presets_available(self):
+        inputs = AnimaArtistPreset.INPUT_TYPES()["required"]
+
+        self.assertEqual(inputs["preset"][0], constants.PRESET_CHOICES)
+        self.assertIn(constants.PRESET_COMPATIBILITY_SAFE, inputs["preset"][0])
+        self.assertIn(constants.PRESET_FACE_LOCK, inputs["preset"][0])
 
     def test_node_mappings_complete(self):
         import anima_mixer

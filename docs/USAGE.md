@@ -12,7 +12,7 @@ v25.1 also adds per-artist layer routing, matching the original repository's fir
 
 v25.2 adds per-artist sampling timing, a `compatibility_safe` preset, Inspector block maps, runtime warnings for suspicious cross-attention / model-wrapper conflicts, and UX helper nodes for building or previewing artist chains before CLIP encoding.
 
-v26 adds negative artist weights (style subtraction, `::name::-0.5`), smoothstep timing fades (`%start-end~fade`), stronger style-drift reduction (`match_base_norm` with token/per-artist norm lock), prompt-aware `drift_auto` plus scene-tuned low-drift presets (`drift_soft`, `face_lock`, `scene_lock`), VRAM controls (`max_batch_artists`, `low_vram_cache`), shareable JSON recipes (`AnimaArtistRecipeSave/Load`), a per-layer style probe (`AnimaArtistProbe` + `AnimaArtistProbeReport`), a CFG correctness fix for batch sizes > 1, and a package restructure with a real test suite and CI. See [CHANGELOG.md](../CHANGELOG.md).
+v26 adds negative artist weights (style subtraction, `::name::-0.5`), smoothstep timing fades (`%start-end~fade`), optional style-drift reduction (`match_base_norm` with token/per-artist norm lock), prompt-aware `drift_auto` plus scene-tuned low-drift presets (`drift_soft`, `face_lock`, `scene_lock`), VRAM controls (`max_batch_artists`, `low_vram_cache`), shareable JSON recipes (`AnimaArtistRecipeSave/Load`), a per-layer style probe (`AnimaArtistProbe` + `AnimaArtistProbeReport`), a CFG correctness fix for batch sizes > 1, and a package restructure with a real test suite and CI. See [CHANGELOG.md](../CHANGELOG.md).
 
 ## What problem it solves
 
@@ -22,6 +22,8 @@ Anima uses an LLM as its text encoder (unlike SDXL's CLIP). LLM encoders are hea
 - Multiple artist tags together: the artist tags' embeddings interfere with each other, and the resulting conditioning ends up looking like neither A nor B but a "squeezed-together" middle ground.
 
 This node encodes each artist as a **separate** conditioning, bypassing the interference at the encoding stage, then mixes them inside the model at the cross-attention level using selectable strategies. Mixing happens in an already-stabilized feature space, where it's far more controllable than mixing at the prompt level.
+
+The product goal is practical image generation: predictable artist mixing on top of the base model. The default path should preserve the prompt and expose controllable artist influence. Automatic low-drift routing and stabilizers are opt-in tools, not the default style source.
 
 ## How it works
 
@@ -42,7 +44,7 @@ The DiT backbone has 28 blocks total, each with its own independent cross-attent
 
 ### Injection mechanism
 
-The node replaces `diffusion_model.blocks[i].cross_attn` with a wrapper using ComfyUI's `add_object_patch` API. This is clone-safe — it doesn't pollute the original model and is automatically undone when the workflow disconnects.
+The node patches `diffusion_model.blocks[i].cross_attn.forward` using ComfyUI's `add_object_patch` API. The attention module itself stays in the original model tree, so parameter paths remain stable when one workflow compares patched and unpatched sampler branches.
 
 Each artist conditioning is lazily run through the LLMAdapter on its first forward call (when the model is already on GPU), producing a `(1, 512, 1024)` processed embedding that's cached for reuse across sampling steps.
 
@@ -60,16 +62,16 @@ In multi-artist setups, the same prompt with different seeds tends to produce **
 - For each seed, attention picks slightly different artist token weights
 - Across seeds, the "dominant artist" can flip
 
-v26 keeps the per-artist token norm lock on by default, then layers optional stabilizers from light to heavy (configured in `AnimaArtistOptions` or selected through `AnimaArtistPreset`):
+v26 keeps `balanced` close to the original mixer behavior by default, then layers optional stabilizers from light to heavy (configured in `AnimaArtistOptions` or selected through `AnimaArtistPreset`):
 
-0. **match_base_norm + norm_lock_mode=token + norm_lock_scope=per_artist** — per-token RMS alignment applied to each artist before mixing, reducing seed-specific style-strength spikes
+0. **match_base_norm + norm_lock_mode=token + norm_lock_scope=per_artist** — optional per-token RMS alignment applied to each artist before mixing, reducing seed-specific style-strength spikes
 1. **artist_ema_alpha** — temporal EMA smoothing across sampling steps
 2. **combine_mode = lowrank_avg + lowrank_k** — deterministic low-rank constraint on multi-artist deltas
 3. **artist_static_capture + static_capture_k** — freeze artist attention after the first K steps
 4. **contribution_balance** — optional experimental delta-strength equalizer for artist dominance flips; default off because static capture was more reliable in live A/B
 5. **artist_anchor_q** — replace user-seed Q with a fixed-seed anchor's Q (most aggressive built-in stabilizer; not a complete image lock)
 
-These can be combined freely. Disable `match_base_norm` only when you intentionally want pre-v26 behavior for A/B testing.
+These can be combined freely. Enable `match_base_norm` only when you intentionally want v26 norm-lock stabilization instead of original-style behavior.
 
 ## Mathematical limits of artist mixing
 
@@ -116,7 +118,8 @@ Restart ComfyUI. No extra dependencies.
 (optional) AnimaArtistStarter ───────► artist_chain ──► AnimaArtistPack
                                   └──► preset / advanced_options ──► AnimaArtistCrossAttn
 (optional) AnimaArtistPreset  ──► preset ────────────► AnimaArtistCrossAttn
-(optional) AnimaArtistOptions ──► advanced_options ──► AnimaArtistCrossAttn
+(optional) AnimaArtistSimpleOptions ─► advanced_options ─► AnimaArtistCrossAttn
+(optional) AnimaArtistOptions (Expert) ─► advanced_options ─► AnimaArtistCrossAttn
 (optional) AnimaArtistInspector ◄── artist_pack / preset / advanced_options
 ```
 
@@ -135,7 +138,7 @@ Key points:
 - Encode the negative prompt independently with `CLIPTextEncode`; it does not go through this plugin
 - Start with `AnimaArtistPreset(preset=balanced)` unless you already know which advanced settings you want
 - Use `AnimaArtistPreset(preset=compatibility_safe)` first when combining with regional prompts, Forge Couple-style routing, attention masks, or other cross-attention patch nodes
-- Advanced controls (layer range, sampling-step range, stabilizers) come via the optional `AnimaArtistOptions` node
+- Common layer/timing controls come via `AnimaArtistSimpleOptions`; stabilizers and debug controls stay in `AnimaArtistOptions (Expert)`
 - Use `AnimaArtistInspector` to show the actual effective weights, block map, preset settings, and configuration warnings inside ComfyUI
 
 ## Parameters
@@ -165,7 +168,7 @@ Only the artist column is required. Bad weights are not silently swallowed; the 
 | `balanced` | Default first run |
 | `strong_style` | Stronger visual style |
 | `stable_seed` | Same prompt across many seeds |
-| `drift_auto` | Let the node route common low-drift prompt shapes from `base_prompt` |
+| `drift_auto` | Explicit opt-in automatic low-drift routing from `base_prompt` |
 | `drift_soft` | Portrait / broad-subject prompts with softer style lock |
 | `face_lock` | Close-up face prompts |
 | `scene_lock` | Explicit wide / background-heavy scene prompts |
@@ -262,11 +265,11 @@ Outputs:
 
 ### AnimaArtistPreset (one-click helper)
 
-This is the recommended entry point for new workflows. It outputs both `ANIMA_PRESET` and `ANIMA_OPTS`.
+This is the one-click preset helper. Start with `balanced` for predictable artist mixing; choose `drift_auto` only when you explicitly want automatic low-drift routing.
 
 | Preset | What it does |
 |---|---|
-| `balanced` | `output_avg + interpolate`, light EMA. Best default |
+| `balanced` | `output_avg + interpolate`, original-style default with EMA and norm-lock off |
 | `strong_style` | Stronger style amplification with controlled extrapolation |
 | `stable_seed` | `output_avg + static_capture K=4 + no_norm + strength 1.0 + auto layers 9-20`, content-safer cross-seed stability |
 | `drift_auto` | Runtime route to `drift_soft`, `stable_seed`, `face_lock`, `scene_lock`, `compatibility_safe`, or the internal `compatibility_safe_9_15` route from `AnimaArtistPack.base_prompt` and artist count; Inspector reports the resolved preset and reason |
@@ -292,6 +295,20 @@ This is the recommended entry point for new workflows. It outputs both `ANIMA_PR
 
 When both `preset` and `advanced_options` are connected to `AnimaArtistCrossAttn`, the preset fills the base configuration and `advanced_options` overrides the detailed fields.
 
+### AnimaArtistSimpleOptions (simple)
+
+Use this node for common tweaks without opening the full expert panel.
+
+| Parameter | Description |
+|---|---|
+| `normalize_weights` | Recommended on. Auto-bypassed when any artist uses `::weight` syntax |
+| `layer_mode` | Global layer shortcut: auto / all layers / style core / detail layers / custom |
+| `start_percent` / `end_percent` | Sampling progress window. Use this to reduce runtime or limit style timing |
+| `custom_layer_filter` | Used only when `layer_mode=custom`. Example: `"0,3,5-10,-1"` |
+| `compatibility_mode` | Forces the safer concat path when regional prompts or other attention patchers conflict |
+
+It outputs the same `ANIMA_OPTS` type as the expert node, so wire it to `AnimaArtistCrossAttn.advanced_options`.
+
 ### AnimaArtistInspector (UI report)
 
 Connect `artist_pack`, and optionally the same `preset` / `advanced_options` used by `AnimaArtistCrossAttn`. If you are not using presets, set Inspector's `combine_mode`, `fusion_mode`, and `strength` to match the CrossAttn node. It prints:
@@ -308,9 +325,9 @@ Connect `artist_pack`, and optionally the same `preset` / `advanced_options` use
 
 Use this node whenever results look wrong. It catches common mistakes faster than reading console logs.
 
-### AnimaArtistOptions (advanced)
+### AnimaArtistOptions (Expert)
 
-Not connecting this node = default behavior. Connecting it makes its settings take effect.
+Not connecting this node = default behavior. Prefer `AnimaArtistSimpleOptions` for normal workflows; use this expert node only for stabilizer A/B, VRAM controls, and debugging.
 
 | Parameter | Description |
 |---|---|
@@ -331,7 +348,7 @@ Not connecting this node = default behavior. Connecting it makes its settings ta
 | `compatibility_mode` | Forces `concat + concat_with_base`, disables EMA/static/anchor stabilizers, and reduces conflict risk with regional/attention-patching nodes |
 | `max_batch_artists` (v26) | Caps how many artists share one batched cross-attention forward. `0` = no cap. Set `2-8` to bound peak VRAM with many artists at high resolution instead of falling back to slow sequential mode |
 | `low_vram_cache` (v26) | Stores static-capture and anchor caches in system RAM instead of VRAM. Saves hundreds of MB at high resolution for a small per-step transfer cost |
-| `match_base_norm` (v26) | Enables inference-time norm locking. The artist attention output is rescaled against the base attention output so activation-energy mismatch does not compound across layers as seed-dependent style-strength swings. Default on; disable only to reproduce pre-v26 behavior |
+| `match_base_norm` (v26) | Enables inference-time norm locking. The artist attention output is rescaled against the base attention output so activation-energy mismatch does not compound across layers as seed-dependent style-strength swings. Default off for original-style behavior; enable for v26 stabilization A/B |
 | `norm_lock_mode` (v26) | `token` (default) matches each image token's RMS to the base token, which is strongest for local style-strength stability. `row` keeps the legacy whole-row RMS behavior |
 | `norm_lock_scope` (v26) | `per_artist` (default) normalizes each artist output before mixing, so one seed-specific artist spike cannot dominate the weighted average. `mixed` normalizes only the final mixed output. `both` applies both clamps and is the strongest but can make style blends more uniform |
 | `contribution_balance` (v26) | Optional artist-delta equalizer. Default off; enable only when one artist repeatedly dominates after norm lock/static capture |
@@ -441,13 +458,13 @@ The base direction is left untouched; the artist can only add a sideways offset.
 
 ## Cross-seed stabilizers in detail
 
-Norm locking is on by default. Enable the remaining stabilizers progressively from light to heavy.
+Norm locking is off by default so `balanced` stays close to the original mixer. Enable stabilizers progressively from light to heavy.
 
-### match_base_norm + norm lock (default)
+### match_base_norm + norm lock (optional)
 
 The weighted artist output can have a different activation energy from the base attention output expected by downstream blocks. That mismatch can compound across layers and show up as seed-dependent style-strength swings: one seed looks washed out, another overpowered, another balanced.
 
-`match_base_norm` keeps the artist direction but rescales its RMS energy toward the base output. In v26 the default is:
+`match_base_norm` keeps the artist direction but rescales its RMS energy toward the base output. When enabled, the recommended v26 configuration is:
 
 ```text
 match_base_norm = True
@@ -523,7 +540,7 @@ First-time cost: ~1 extra step worth of forward time for the anchor pass. After 
 
 Mutually exclusive with `artist_static_capture` (anchor takes priority, with a warn log).
 
-### stable_seed (recommended)
+### stable_seed (opt-in)
 
 The current `stable_seed` preset uses `output_avg + artist_static_capture + static_capture_k=4 + match_base_norm=False + strength=1.0 + layer_filter=9-20` when `layer_mode=auto`.
 Live A/B favored this static-capture layer window over the stronger anchor-Q default for mixed portrait / close-up / street checks because it lowered foreground descriptor drift without the face, clothing, and full-layer smear failures seen in anchor-heavy runs. Use `anchor_lock` if you explicitly want the older stronger 4-anchor Q behavior.
@@ -532,7 +549,7 @@ Live A/B favored this static-capture layer window over the stronger anchor-Q def
 
 ### Scene-tuned low-drift presets
 
-There is no single low-drift setting that wins across every prompt shape. v26 therefore keeps `stable_seed` as the general cross-seed preset, adds `drift_auto` to choose among the scene-tuned variants from `base_prompt` and artist count, and keeps the manual variants available for common failure cases:
+There is no single low-drift setting that wins across every prompt shape. Keep `balanced` as the default artist mixer; use `stable_seed`, `drift_auto`, and the scene-tuned variants only when you explicitly want lower drift over original-style behavior:
 
 | Preset | Use when | Difference from `stable_seed` |
 |---|---|---|

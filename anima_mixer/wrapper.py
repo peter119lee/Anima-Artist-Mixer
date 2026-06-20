@@ -618,7 +618,7 @@ class CrossAttnWrapper(nn.Module):
         n = len(individuals)
         static_capture = self._st.get("artist_static_capture", False)
         norm_scope = _resolve_norm_lock_scope(self._st.get("norm_lock_scope", NORM_LOCK_SCOPE_PER_ARTIST))
-        do_norm_lock = self._st.get("match_base_norm", True) and fusion_mode in (
+        do_norm_lock = self._st.get("match_base_norm", False) and fusion_mode in (
             FUSION_INTERPOLATE, FUSION_BASE_PRESERVE
         )
         # The static-capture path must collect N independent outputs to cache
@@ -893,7 +893,7 @@ class CrossAttnWrapper(nn.Module):
         """
         ws, _ = self._effective_weights(weights, fades)
         norm_scope = _resolve_norm_lock_scope(self._st.get("norm_lock_scope", NORM_LOCK_SCOPE_PER_ARTIST))
-        do_norm_lock = self._st.get("match_base_norm", True) and fusion_mode in (
+        do_norm_lock = self._st.get("match_base_norm", False) and fusion_mode in (
             FUSION_INTERPOLATE, FUSION_BASE_PRESERVE
         )
         per_artist_lock = do_norm_lock and norm_scope in (
@@ -979,7 +979,7 @@ class CrossAttnWrapper(nn.Module):
             device=context.device, dtype=context.dtype)
 
         norm_scope = _resolve_norm_lock_scope(self._st.get("norm_lock_scope", NORM_LOCK_SCOPE_PER_ARTIST))
-        do_norm_lock = self._st.get("match_base_norm", True) and fusion_mode in (
+        do_norm_lock = self._st.get("match_base_norm", False) and fusion_mode in (
             FUSION_INTERPOLATE, FUSION_BASE_PRESERVE
         )
         mixed_lock = do_norm_lock and norm_scope in (

@@ -9,10 +9,14 @@ Anima uses an LLM as its text encoder. When multiple artist tags are stacked in 
 
 The bundled `AnimaArtistPack` node provides a one-shot experience: write your artist list (separated by commas or newlines) in one text box, your main prompt in another, and the node handles splitting, encoding, and packaging automatically.
 
-The current release (v26) adds negative artist weights (style subtraction), smoothstep timing fades (`%0.0-0.45~0.1`), stronger style-drift reduction via token-level base-energy norm locking (`match_base_norm`, `norm_lock_mode`, `norm_lock_scope`), the content-safer `stable_seed` static-capture preset, prompt-aware `drift_auto` routing plus scene-tuned low-drift presets (`drift_soft`, `face_lock`, `scene_lock`), a stronger legacy `anchor_lock` preset, a per-layer style probe that measures where each artist actually lives in the model, shareable JSON recipes, VRAM controls (`max_batch_artists`, `low_vram_cache`), a CFG correctness fix for batch sizes > 1, and a full package restructure with tests and CI. Earlier releases added one-click presets, UX helper nodes, an in-UI inspector, deterministic low-rank mixing, layered cross-seed stabilizers, CFG-style strength extrapolation, the linear injection-layer weight syntax `::name::weight`, per-artist layer/timing routing, and a compatibility-safe preset. See [CHANGELOG.md](CHANGELOG.md).
+Product principle: the default path is predictable artist mixing on top of the base model. It should preserve the prompt and expose artist influence in a controllable way; automatic low-drift routing and stabilizers are opt-in tools, not the default style source.
+
+The current release (v26) adds negative artist weights (style subtraction), smoothstep timing fades (`%0.0-0.45~0.1`), optional style-drift reduction via token-level base-energy norm locking (`match_base_norm`, `norm_lock_mode`, `norm_lock_scope`), the content-safer `stable_seed` static-capture preset, prompt-aware `drift_auto` routing plus scene-tuned low-drift presets (`drift_soft`, `face_lock`, `scene_lock`), a stronger legacy `anchor_lock` preset, a per-layer style probe that measures where each artist actually lives in the model, shareable JSON recipes, VRAM controls (`max_batch_artists`, `low_vram_cache`), a CFG correctness fix for batch sizes > 1, and a full package restructure with tests and CI. Earlier releases added one-click presets, UX helper nodes, an in-UI inspector, deterministic low-rank mixing, layered cross-seed stabilizers, CFG-style strength extrapolation, the linear injection-layer weight syntax `::name::weight`, per-artist layer/timing routing, and a compatibility-safe preset. See [CHANGELOG.md](CHANGELOG.md).
 
 ## Quick links
 
+- [Mode Comparison Guide](docs/MODE_COMPARISON.md) — **新手推薦**：快速決策樹和模式比較
+- [PR Summary](docs/PR_SUMMARY.md) — v26 重大更新總覽
 - [Full documentation](docs/USAGE.md) — usage, parameters, modes, stabilizers, performance tips
 - [Changelog](CHANGELOG.md) — version history
 - [Issues](../../issues) — bug reports, feature requests
@@ -39,7 +43,7 @@ Restart ComfyUI. No extra dependencies.
 
 Open [`workflow/Shift testing.before-basic-simplify.json`](<workflow/Shift testing.before-basic-simplify.json>)
 for a complete importable example. It keeps the real generation/output chain
-and shows the recommended `AnimaArtistPreset(preset = drift_auto)` wiring
+and shows the recommended `AnimaArtistPreset(preset = balanced)` wiring
 without requiring users to build the workflow from scratch.
 
 - Top text box of `AnimaArtistPack`: your artist chain (comma or newline separated)
@@ -50,6 +54,7 @@ without requiring users to build the workflow from scratch.
 - Bottom text box: the main prompt (no need to repeat artist names here)
 - Wire `AnimaArtistCrossAttn`'s `base_prompt` output directly to KSampler's positive input
 - For a sane first run, connect `AnimaArtistPreset` with `preset = balanced`
+- For common layer/timing tweaks, use `AnimaArtistSimpleOptions`; keep `AnimaArtistOptions (Expert)` for stabilizer A/B and debugging
 - If the workflow also uses regional prompting, Forge Couple-style routing, or other attention patchers, start with `preset = compatibility_safe`
 - When a workflow behaves strangely, connect `AnimaArtistInspector` and read the effective weights / warnings directly in ComfyUI
 
@@ -77,7 +82,8 @@ Manual equivalent:
 combine_mode = output_avg
 fusion_mode  = interpolate
 strength     = 1.0
-artist_ema_alpha = 0.25
+artist_ema_alpha = 0.0
+match_base_norm  = False
 ```
 
 To weight individual artists within the chain, use either of two syntaxes (they can coexist and stack):
@@ -103,11 +109,11 @@ This node wraps Anima cross-attention. Other nodes that also patch attention, re
 
 In multi-artist setups, the same prompt with different seeds tends to produce noticeably different style mixes — sometimes one artist dominates, other times another, even at equal weights. This is structural to how cross-attention interacts with seed-driven hidden state.
 
-v26 keeps norm locking on by default and provides four optional stabilizers via `AnimaArtistOptions`, ordered from light to heavy:
+v26 keeps `balanced` close to the original mixer behavior by default. Common layer/timing controls live in `AnimaArtistSimpleOptions`; optional stabilizers live in `AnimaArtistOptions (Expert)`, ordered from light to heavy:
 
 | Stabilizer | Strength | Notes |
 |---|---|---|
-| `match_base_norm` + `norm_lock_mode=token` + `norm_lock_scope=per_artist` | default | Per-artist token RMS lock; reduces seed-specific style-strength spikes before artists are mixed |
+| `match_base_norm` + `norm_lock_mode=token` + `norm_lock_scope=per_artist` | optional | Per-artist token RMS lock; reduces seed-specific style-strength spikes before artists are mixed |
 | `artist_ema_alpha` | light | Temporal EMA across sampling steps |
 | `combine_mode = lowrank_avg` + `lowrank_k` | medium | Deterministic low-rank constraint on multi-artist deltas |
 | `artist_static_capture` + `static_capture_k` | heavy | Freeze artist attention after K warmup steps; `stable_seed` uses K=4 with auto layers 9-20 and norm lock disabled. Advanced `static_capture_mode` values include `output`, `delta`, `blend`, and `blend_perp`; `output` remains the measured default. |
@@ -116,7 +122,7 @@ v26 keeps norm locking on by default and provides four optional stabilizers via 
 | `artist_anchor_q` | heaviest | Replace user-seed Q with a fixed-seed anchor's Q; `anchor_lock` keeps the legacy 4-anchor path with auto layers 9-25 and user-Q handoff at L16 |
 | `anchor_base_norm_ref` | optional | Anchor the norm reference too when testing `anchor_q + match_base_norm`; useful for A/B, not the measured default |
 
-Recommended progression: keep the default token/per-artist norm lock on, then use `stable_seed` for content-safer cross-seed work. For lower drift, try `drift_auto` first; it routes 4+ artist wide / background-heavy scenes to `face_lock`, smaller explicit wide / background-heavy scenes to `scene_lock`, 4+ artist simple fullbody prompts to `drift_soft`, 4+ artist close-ups to `stable_seed` plus `mixed_delta_cap_ratio=0.75`, 4+ artist street / urban prompts to `compatibility_safe`, other 4+ artist portrait / broad-subject prompts to the internal `compatibility_safe_9_15` route, smaller close-up face prompts to `face_lock`, and the remaining portrait / broad-subject and plain street/fullbody prompts to `drift_soft` from the `base_prompt` and artist count. If a known artist set still shows large seed-to-seed swings, A/B `mixed_delta_cap` at ratios around `0.75-1.0` before changing presets globally. Use the manual variants when you already know the prompt type, and use `anchor_lock` only when you explicitly want the stronger anchor-Q lock. See [docs/USAGE.md](docs/USAGE.md) for detailed mechanics and tuning.
+Recommended progression: start with `balanced` for original-style behavior, then use `stable_seed` or `drift_auto` for content-safer cross-seed work. For lower drift, `drift_auto` routes 4+ artist wide / background-heavy scenes to `face_lock`, smaller explicit wide / background-heavy scenes to `scene_lock`, 4+ artist simple fullbody prompts to `drift_soft`, 4+ artist close-ups to `stable_seed` plus `mixed_delta_cap_ratio=0.75`, 4+ artist street / urban prompts to `compatibility_safe`, other 4+ artist portrait / broad-subject prompts to the internal `compatibility_safe_9_15` route, smaller close-up face prompts to `face_lock`, and the remaining portrait / broad-subject and plain street/fullbody prompts to `drift_soft` from the `base_prompt` and artist count. If a known artist set still shows large seed-to-seed swings, A/B `match_base_norm` or `mixed_delta_cap` at ratios around `0.75-1.0` before changing presets globally. Use the manual variants when you already know the prompt type, and use `anchor_lock` only when you explicitly want the stronger anchor-Q lock. See [docs/USAGE.md](docs/USAGE.md) for detailed mechanics and tuning.
 
 ## Style amplification
 
@@ -139,7 +145,7 @@ Generation time scales with artist count. Per the math of `output_avg`, each lay
 | 5 artists + `artist_static_capture` (K=6) | ~1.1x |
 | 5 artists + `artist_anchor_q` (cached) | ~1.05x |
 
-**Strongly recommended**: connect `AnimaArtistOptions` and limit either the layer range (`start_block / end_block`) or the sampling-step range (`start_percent / end_percent`). Both can dramatically reduce generation time with minimal quality loss, and stack with the cache-based stabilizers above. With many artists at high resolution, set `max_batch_artists` (2-8) to bound peak VRAM and `low_vram_cache` to keep stabilizer caches in system RAM. See the docs for details.
+**Strongly recommended**: connect `AnimaArtistSimpleOptions` and limit either the layer shortcut or the sampling-step range. Both can dramatically reduce generation time with minimal quality loss. With many artists at high resolution, use `AnimaArtistOptions (Expert)` only when you need VRAM caps, cache offload, or stabilizer A/B. See the docs for details.
 
 ## Measuring where styles live (v26)
 
