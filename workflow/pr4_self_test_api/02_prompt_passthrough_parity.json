@@ -31,7 +31,7 @@
     "class_type": "AnimaArtistPack",
     "inputs": {
       "clip": ["2", 0],
-      "artist_chain": "1.2::@yuchi \\(salmon-1000\\)::, @uof::0.8",
+      "artist_chain": "1.2::@yuchi \\(salmon-1000\\)::, 0.8::@uof::",
       "base_prompt": "1girl, solo, upper body portrait, face visible, white blouse, navy jacket, looking at viewer, simple background, clean linework, detailed eyes"
     }
   },

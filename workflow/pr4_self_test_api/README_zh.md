@@ -92,7 +92,7 @@ Get-ChildItem "workflow\pr4_self_test_api\*.json" | ForEach-Object {
 这个 workflow 有两条分支：
 
 - 直接 prompt：`(@yuchi \(salmon-1000\):1.2), (@uof:0.8), ...`
-- `prompt_passthrough`：artist chain 写成 `1.2::@yuchi \(salmon-1000\)::, @uof::0.8`
+- `prompt_passthrough`：artist chain 写成 `1.2::@yuchi \(salmon-1000\)::, 0.8::@uof::`
 
 期望结果：
 
@@ -152,8 +152,8 @@ artist chain:
 artist chain:
 
 ```text
-::@uof::1.0@0-12%0.0-0.55~0.10
-::@kieed::-0.5@9-20%0.35-1.0~0.10
+1.0::@uof@0-12%0.0-0.55~0.10::
+-0.5::@kieed@9-20%0.35-1.0~0.10::
 @ciloranko@19-27
 ```
 

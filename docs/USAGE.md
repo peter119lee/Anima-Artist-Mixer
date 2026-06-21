@@ -6,13 +6,13 @@ This is a ComfyUI custom node that provides **multi-artist mixing** for the Anim
 
 The companion `AnimaArtistPack` node provides a one-shot experience: write your artist list in one text box (comma or newline separated) and your main prompt in another. The node automatically splits, encodes, and packages everything for downstream use.
 
-This README documents the **v26 architecture**, which adds one-click presets, an in-UI inspector, deterministic low-rank mixing, safer explicit weights, layered cross-seed stabilization (norm lock / EMA / low-rank / static-capture / anchor-Q), CFG-style strength extrapolation, and the linear injection-layer weight syntax `::name::weight`. Older versions are still functionally a subset.
+This README documents the **v26 architecture**. The default `balanced` preset stays close to the original artist mixer, while `prompt_passthrough` provides no-mixer/direct-prompt parity and `drift_auto` provides an opt-in low-drift route. Older versions are still functionally a subset.
 
 v25.1 also adds per-artist layer routing, matching the original repository's first public feature request: different artists can now be injected into different DiT block ranges from the same artist chain.
 
 v25.2 adds per-artist sampling timing, a `compatibility_safe` preset, Inspector block maps, runtime warnings for suspicious cross-attention / model-wrapper conflicts, and UX helper nodes for building or previewing artist chains before CLIP encoding.
 
-v26 adds negative artist weights (style subtraction, `::name::-0.5`), smoothstep timing fades (`%start-end~fade`), optional style-drift reduction (`match_base_norm` with token/per-artist norm lock), prompt-aware `drift_auto` plus scene-tuned low-drift presets (`drift_soft`, `face_lock`, `scene_lock`), VRAM controls (`max_batch_artists`, `low_vram_cache`), shareable JSON recipes (`AnimaArtistRecipeSave/Load`), a per-layer style probe (`AnimaArtistProbe` + `AnimaArtistProbeReport`), a CFG correctness fix for batch sizes > 1, and a package restructure with a real test suite and CI. See [CHANGELOG.md](../CHANGELOG.md).
+v26 adds prefix artist weights (`1.2::artist::`), base-prompt tag weights (`1.2::masterpiece::`), negative artist weights (style subtraction, `-0.5::artist::`), smoothstep timing fades (`%start-end~fade`), optional style-drift reduction (`match_base_norm` with token/per-artist norm lock), prompt-aware `drift_auto` plus scene-tuned low-drift presets (`drift_soft`, `face_lock`, `scene_lock`), VRAM controls (`max_batch_artists`, `low_vram_cache`), shareable JSON recipes (`AnimaArtistRecipeSave/Load`), a per-layer style probe (`AnimaArtistProbe` + `AnimaArtistProbeReport`), a CFG correctness fix for batch sizes > 1, and a package restructure with a real test suite and CI. Existing artist layer and timing routes remain supported. See [CHANGELOG.md](../CHANGELOG.md).
 
 ## What problem it solves
 
@@ -123,10 +123,12 @@ Restart ComfyUI. No extra dependencies.
 (optional) AnimaArtistInspector ◄── artist_pack / preset / advanced_options
 ```
 
-Open [`../workflow/Shift testing.before-basic-simplify.json`](<../workflow/Shift testing.before-basic-simplify.json>)
-for a complete importable example. It keeps the generation and output nodes
-in place so users can load it directly and see how the Anima nodes fit into a
-real graph.
+Open [`../sample workflow.json`](<../sample workflow.json>) first. It uses the
+current `AnimaArtistPack -> AnimaArtistPresetApply` route, so preset-owned
+values are not mixed with ignored manual widgets.
+
+Open [`../workflow/node_usage_showcase/README_zh.md`](../workflow/node_usage_showcase/README_zh.md)
+when you want a Chinese guide and example workflow for every node in the pack.
 
 Open [`../workflow/artist-layer-role-routing.json`](<../workflow/artist-layer-role-routing.json>)
 for a focused character / clothing / background routing example. It maps
@@ -244,12 +246,12 @@ It does not need CLIP or a model. Use it before `AnimaArtistPack` when experimen
 | Parameter | Type | Description |
 |---|---|---|
 | `clip` | CLIP | Anima-compatible CLIP |
-| `artist_chain` | STRING (multiline) | Artist chain. Comma or newline separated. Supports CLIP weighting `(wlop:1.2)`, injection-layer weight `::wlop::1.5`, per-artist layer routing `@0-8` / `@33%-67%` / `@0.33-0.67`, and per-artist timing `%0.0-0.45` |
+| `artist_chain` | STRING (multiline) | Artist chain. Comma or newline separated. Supports CLIP weighting `(wlop:1.2)`, injection-layer weight `1.5::wlop::`, per-artist layer routing `@0-8` / `@33%-67%` / `@0.33-0.67`, and per-artist timing `%0.0-0.45` |
 | `base_prompt` | STRING (multiline, optional) | Main prompt. Leave empty to encode artists alone |
 
 Outputs `ANIMA_PACK`, an internal struct holding each artist's separately-encoded conditioning, the artist label list, the parsed per-artist weights, and a separately-encoded conditioning for the bare base prompt.
 
-How it works internally: the node splits `artist_chain` into N artist names, parses any `::name::weight` syntax to extract per-artist injection weights (which are stripped before CLIP encoding), and encodes each as `<artist_name>\n<base_prompt>` (Anima's recommended format: artist first, newline, then main prompt). It also encodes a clean copy of `base_prompt` alone for use as KSampler's positive conditioning.
+How it works internally: the node splits `artist_chain` into N artist names, parses any `weight::name::` injection weights (and old postfix weights for compatibility), strips those weights before CLIP encoding, and encodes each as `<artist_name>\n<base_prompt>` (Anima's recommended format: artist first, newline, then main prompt). It also encodes a clean copy of `base_prompt` alone for use as KSampler's positive conditioning.
 
 ### AnimaArtistPresetApply (preset node)
 
@@ -652,7 +654,7 @@ anchor_user_blend = 0.0
 To control individual artist strength within the chain, use either weight syntax inside `artist_chain`:
 
 ```
-wlop, ::sakimichan::1.2, (krenz:0.7)
+wlop, 1.2::sakimichan::, (krenz:0.7)
 ```
 
 ## Performance notes
@@ -697,7 +699,7 @@ The two text boxes of `AnimaArtistPack` have distinct roles:
 ```
 artist_chain (top box):
   wlop
-  ::sakimichan::1.2
+  1.2::sakimichan::
   (krenz:0.7)
 
 base_prompt (bottom box):
@@ -711,18 +713,27 @@ Internally the node concatenates each as `<artist_name>\n<base_prompt>` before e
 There are **two independent** weighting points:
 
 1. **CLIP weighting** (`(name:1.2)` syntax): scales token embeddings before they pass through the LLMAdapter (a non-linear 6-layer transformer). Outcome isn't strictly predictable but stays close to the LLM's natural output distribution. Same as SD/A1111 syntax.
-2. **Injection-layer weighting** (`::name::1.5` syntax, v24): scales the artist's contribution at the cross-attention output stage. Linear and predictable: `::name::2.0` makes that artist's relative contribution exactly twice as strong as a default-weight artist.
+2. **Injection-layer weighting** (`1.5::name::` syntax): scales the artist's contribution at the cross-attention output stage. Linear and predictable: `2.0::name::` makes that artist's relative contribution exactly twice as strong as a default-weight artist.
 
-They can be **stacked**: `::(wlop:1.1)::0.8` applies CLIP weight 1.1 first, then injection weight 0.8.
+They can be **stacked**: `0.8::(wlop:1.1)::` applies CLIP weight 1.1 first, then injection weight 0.8.
 
 When any artist uses `::weight` syntax, `normalize_weights` is automatically bypassed at runtime (the explicit weights are honored as-is).
+
+Older postfix forms such as `::name::1.2`, `name::1.2`, and `::(name:1.1)::0.8` still load for backward compatibility. New workflows should use prefix syntax because it composes cleanly with routes:
+
+```
+1.2::@artist_a@0-8::
+1.2::@artist_a@0-8%0.0-0.45~0.1::
+```
+
+Do not split the route outside the weighted target. Use `1.2::@artist_a@0-8::`, not `1.2::@artist_a::@0-8`.
 
 #### Negative weights: style subtraction (v26)
 
 Injection weights accept negative values in `[-4, 0)`:
 
 ```
-wlop, ::pixiv_generic::-0.4
+wlop, -0.4::pixiv_generic::
 ```
 
 A negative-weight artist's attention output is subtracted from the mix instead of added, pushing the result **away** from that style direction. Practical uses:
@@ -740,8 +751,8 @@ Add `@layer_filter` at the end of an artist entry to make that artist active onl
 
 ```
 wlop@0-8
-::sakimichan::1.2@9-18
-::(krenz:1.1)::0.8@19-27
+1.2::sakimichan@9-18::
+0.8::(krenz:1.1)@19-27::
 ```
 
 Artist tags that already start with `@` still work. For example, `@wlop` is treated as the artist name, while `@wlop@0-8` means artist `@wlop` routed to blocks `0-8`. The parser only treats the final `@...` segment as a route when it contains layer-filter characters (`0-9`, comma, dash, decimal point, percent sign, spaces, or Chinese comma).
@@ -789,7 +800,7 @@ Layer routing and timing can be combined. Put layer routing first, timing last:
 
 ```
 wlop@0-8%0.0-0.45
-::krenz::1.2@9-18%0.35-0.85
+1.2::krenz@9-18%0.35-0.85::
 hiten@19-27%0.65-1.0
 @background_artist@0.00-0.33%0.0-0.45
 ```
@@ -810,7 +821,7 @@ A hard timing window switches an artist on/off between two adjacent steps, which
 
 ```
 wlop%0.0-0.45~0.1
-::krenz::1.2@9-18%0.35-0.85~0.08
+1.2::krenz@9-18%0.35-0.85~0.08::
 ```
 
 `wlop%0.0-0.45~0.1` means: weight ramps 0→1 over progress `0.0-0.1`, stays at full weight until `0.35`, then ramps 1→0 over `0.35-0.45`. The fade is clamped to at most half the window. With `normalize_weights` on, a fading artist's share is smoothly redistributed to the other active artists — exactly the crossfade you want for scheduled chains. `~0` (or omitting `~fade`) reproduces the old hard-switch behavior.
@@ -833,12 +844,12 @@ The node intercepts dangerous configurations when `::weight` is not in use:
 | 2~3 artists | Warning, but allowed (may overexpose) |
 | 4+ artists | **Hard error**, with three suggested fixes |
 
-When `::weight` is used, v25 judges risk by the **actual sum of absolute linear weights**, not by artist count. Four artists at `::0.25` each are valid because the total is still 1.0.
+When `::weight` is used, v25 judges risk by the **actual sum of absolute linear weights**, not by artist count. Four artists written as `0.25::artist::` each are valid because the total is still 1.0.
 
-If you actually want "one artist weakened", the recommended approach is to use injection weighting `::name::0.3` to lower a specific artist:
+If you actually want "one artist weakened", the recommended approach is to use injection weighting `0.3::name::` to lower a specific artist:
 
 ```
-wlop, ::krenz::0.3
+wlop, 0.3::krenz::
 ```
 
 This keeps wlop dominant with a krenz accent, without breaking total-contribution stability.

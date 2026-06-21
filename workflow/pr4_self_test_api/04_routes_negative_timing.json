@@ -24,7 +24,7 @@
     "class_type": "AnimaArtistPack",
     "inputs": {
       "clip": ["2", 0],
-      "artist_chain": "::@uof::1.0@0-12%0.0-0.55~0.10\n::@kieed::-0.5@9-20%0.35-1.0~0.10\n@ciloranko@19-27",
+      "artist_chain": "1.0::@uof@0-12%0.0-0.55~0.10::\n-0.5::@kieed@9-20%0.35-1.0~0.10::\n@ciloranko@19-27",
       "base_prompt": "1girl, solo, upper body portrait, face visible, white blouse, navy jacket, looking at viewer, simple background, clean linework, detailed eyes"
     }
   },

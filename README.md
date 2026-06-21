@@ -11,12 +11,13 @@ The bundled `AnimaArtistPack` node provides a one-shot experience: write your ar
 
 Product principle: the default path is predictable artist mixing on top of the base model. It should preserve the prompt and expose artist influence in a controllable way; automatic low-drift routing and stabilizers are opt-in tools, not the default style source.
 
-The current release (v26) adds negative artist weights (style subtraction), smoothstep timing fades (`%0.0-0.45~0.1`), optional style-drift reduction via token-level base-energy norm locking (`match_base_norm`, `norm_lock_mode`, `norm_lock_scope`), the delta-capped `stable_seed` preset, prompt-aware `drift_auto` routing plus scene-tuned low-drift presets (`drift_soft`, `face_lock`, `scene_lock`), a softened `anchor_lock` preset, a per-layer style probe that measures where each artist actually lives in the model, shareable JSON recipes, VRAM controls (`max_batch_artists`, `low_vram_cache`), a CFG correctness fix for batch sizes > 1, and a full package restructure with tests and CI. Earlier releases added one-click presets, UX helper nodes, an in-UI inspector, deterministic low-rank mixing, layered cross-seed stabilizers, CFG-style strength extrapolation, the linear injection-layer weight syntax `::name::weight`, per-artist layer/timing routing, and a compatibility-safe preset. See [CHANGELOG.md](CHANGELOG.md).
+The current release (v26) keeps the original controllable artist-mixer path, then makes the preset workflow clearer and safer. `balanced` stays close to the original mixer behavior; `prompt_passthrough` gives no-mixer/direct-prompt parity while preserving positive `1.2::tag::` weighting syntax; `drift_auto` and the scene presets are opt-in low-drift routes. v26 also supports prefix artist weights (`1.2::artist::`), base-prompt tag weights (`1.2::masterpiece::`), negative artist weights for style subtraction, timing fades (`%0.0-0.45~0.1`), recipes, the layer probe, VRAM controls, a CFG correctness fix for batch sizes > 1, sample workflow fixes, and tests/CI. Existing per-artist layer and timing routes remain supported. See [CHANGELOG.md](CHANGELOG.md).
 
 ## Quick links
 
-- [Mode Comparison Guide](docs/MODE_COMPARISON.md) — **新手推薦**：快速決策樹和模式比較
-- [PR Summary](docs/PR_SUMMARY.md) — v26 重大更新總覽
+- [Simple starter workflow](<sample workflow.json>) — safe preset route using `AnimaArtistPresetApply`
+- [Node usage workflows](workflow/node_usage_showcase/README_zh.md) — Chinese guide covering all bundled nodes
+- [Layer role workflow](workflow/artist-layer-role-routing.json) — character / clothing / background routing example
 - [Full documentation](docs/USAGE.md) — usage, parameters, modes, stabilizers, performance tips
 - [Changelog](CHANGELOG.md) — version history
 - [Issues](../../issues) — bug reports, feature requests
@@ -41,10 +42,12 @@ Restart ComfyUI. No extra dependencies.
 ## Quick start
 ![workflow](docs/images/workflow.png)
 
-Open [`workflow/Shift testing.before-basic-simplify.json`](<workflow/Shift testing.before-basic-simplify.json>)
-for a complete importable example. It keeps the real generation/output chain
-and shows the one-node recommended `AnimaArtistBasic` path without requiring
-users to build the workflow from scratch.
+Open [`sample workflow.json`](<sample workflow.json>) first. It uses the current
+`AnimaArtistPack -> AnimaArtistPresetApply` preset route and avoids the old
+manual widgets that are ignored when a preset is connected.
+
+Open [`workflow/node_usage_showcase/README_zh.md`](workflow/node_usage_showcase/README_zh.md)
+when you want examples for every node in the pack.
 
 Open [`workflow/artist-layer-role-routing.json`](<workflow/artist-layer-role-routing.json>)
 for a bundled `AnimaArtistPreset -> AnimaArtistPresetApply` character /
@@ -94,20 +97,23 @@ artist_ema_alpha = 0.0
 match_base_norm  = False
 ```
 
-To weight individual artists within the chain, use either of two syntaxes (they can coexist and stack):
+To weight individual artists within the chain, use prefix injection weights:
 
 ```
-wlop, ::sakimichan::1.2, (krenz:0.7), ::pixiv_style::-0.4
+wlop, 1.2::sakimichan::, (krenz:0.7), -0.4::pixiv_style::
 ```
 
 - `(name:1.2)` — CLIP-side weighting (same as SD/A1111), non-linear, applied at text encoding
-- `::name::1.2` — injection-side weighting (v24+), linear and predictable, applied at cross-attention output
-- `::name::-0.4` — **negative weight (v26+)**: subtracts that artist's style direction instead of adding it (style subtraction); range is [-4, 4]
+- `1.2::name::` — injection-side weighting, linear and predictable, applied at cross-attention output
+- `-0.4::name::` — negative injection weight: subtracts that artist's style direction instead of adding it (style subtraction); range is [-4, 4]
+- `1.2::masterpiece::` in the base prompt — tag weighting, expanded to normal prompt weight syntax before encoding
+- Older postfix forms like `::name::1.2` still load for compatibility, but new examples use prefix syntax
 - In v25+, any valid `::weight` automatically disables normalization at runtime so explicit weights stay absolute
 - Per-artist layer routing is supported with `@layers`: `wlop@0-8, krenz@33%-67%, hiten@0.67-1.0`
 - Per-artist sampling timing is supported with `%start-end`: `wlop@0-8%0.0-0.45, krenz@9-18%0.45-0.85`
 - Timing windows can fade in/out smoothly with `~fade` (v26+): `wlop%0.0-0.45~0.1` ramps the artist's weight with a smoothstep over a 0.1-progress-wide edge instead of switching on/off abruptly
 - Anima artist tags that start with `@` are safe: `@wlop` remains the artist name; only a final numeric suffix like `@0-8`, `@33%-67%`, or `@0.33-0.67` is treated as layer routing
+- When combining weight and routing, put the route inside the weighted target: `1.2::@artist_a@0-8::`, not `1.2::@artist_a::@0-8`
 
 ## Compatibility notes
 
