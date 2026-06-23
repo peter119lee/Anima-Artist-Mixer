@@ -74,7 +74,7 @@ class AnimaArtistChainBuilder:
             "tooltip": (
                 "Optional timing route, e.g. 0.0-0.45 or 0.0-0.45~0.1 "
                 "(with fade). Used in manual layout; other layouts auto-fill "
-                "empty routes."
+                "empty routes. Use % timing in artist_chain; @0.0-0.5 is a layer range."
             ),
         }
         return {

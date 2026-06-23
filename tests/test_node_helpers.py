@@ -59,6 +59,54 @@ class ArtistRoutingHelpersTest(unittest.TestCase):
         self.assertEqual(resolved[1], (0.45, 0.85, 0.0))
         self.assertIsNone(resolved[2])
 
+    def test_prefix_weighted_routes_parse_inside_closing_boundary(self):
+        parts = parsing.split_artist_chain(
+            "1.2::@artist_a@0-8%0.0-0.45~0.1::, "
+            "-0.5::@artist_b%0.45-1.0::"
+        )
+
+        parts, timings = parsing.parse_artist_timing_routes(parts)
+        parts, layers = parsing.parse_artist_layer_routes(parts)
+        names, weights, explicit = parsing.parse_artist_weights(parts)
+
+        self.assertTrue(explicit)
+        self.assertEqual(names, ["@artist_a", "@artist_b"])
+        self.assertEqual(weights, [1.2, -0.5])
+        self.assertEqual(layers, ["0-8", ""])
+        self.assertEqual(timings, ["0.0-0.45~0.1", "0.45-1.0"])
+
+    def test_at_decimal_window_is_layer_route_not_timing_route(self):
+        parts = parsing.split_artist_chain(
+            "1.0::@artist1@0.0-0.5\n"
+            "1.0::@artist2@0.5-1.0"
+        )
+
+        parts, timings = parsing.parse_artist_timing_routes(parts)
+        parts, layers = parsing.parse_artist_layer_routes(parts)
+        names, weights, explicit = parsing.parse_artist_weights(parts)
+
+        self.assertTrue(explicit)
+        self.assertEqual(names, ["@artist1", "@artist2"])
+        self.assertEqual(weights, [1.0, 1.0])
+        self.assertEqual(layers, ["0.0-0.5", "0.5-1.0"])
+        self.assertEqual(timings, ["", ""])
+
+    def test_percent_decimal_window_is_timing_route(self):
+        parts = parsing.split_artist_chain(
+            "1.0::@artist1%0.0-0.5::\n"
+            "1.0::@artist2%0.5-1.0::"
+        )
+
+        parts, timings = parsing.parse_artist_timing_routes(parts)
+        parts, layers = parsing.parse_artist_layer_routes(parts)
+        names, weights, explicit = parsing.parse_artist_weights(parts)
+
+        self.assertTrue(explicit)
+        self.assertEqual(names, ["@artist1", "@artist2"])
+        self.assertEqual(weights, [1.0, 1.0])
+        self.assertEqual(layers, ["", ""])
+        self.assertEqual(timings, ["0.0-0.5", "0.5-1.0"])
+
     def test_artist_layer_percent_windows_resolve_to_blocks(self):
         parts = parsing.split_artist_chain(
             "@background@0%-33%, "
@@ -855,7 +903,7 @@ class ChainBuilderTest(unittest.TestCase):
 
         self.assertEqual(
             chain,
-            "::@wlop::1.2@0-8%0.0-0.45\n::krenz::0.8@9-18%0.35-0.85",
+            "1.2::@wlop@0-8%0.0-0.45::\n0.8::krenz@9-18%0.35-0.85::",
         )
         self.assertIn("L0-L8: @wlop%0.00-0.45", report)
         self.assertIn("L9-L18: krenz%0.35-0.85", report)
@@ -883,6 +931,19 @@ class ChainBuilderTest(unittest.TestCase):
         self.assertIn("L0-L8: @background", report)
         self.assertIn("L9-L18: @character", report)
         self.assertIn("L19-L27: @clothing", report)
+
+    def test_chain_preview_does_not_treat_artist_digits_as_bad_layer_route(self):
+        cleaned, report = chain_tools.format_artist_chain_preview(
+            "1.0::@artist1%0.0-0.5::\n1.0::@artist2%0.5-1.0::",
+            num_blocks=28,
+        )
+
+        self.assertEqual(
+            cleaned,
+            "@artist1%0.0-0.5\n@artist2%0.5-1.0",
+        )
+        self.assertIn("@artist1 :: 1 % 0.0-0.5", report)
+        self.assertNotIn("invalid layer route kept", report)
 
     def test_chain_builder_accepts_manual_percent_layer_windows(self):
         chain, report = chain_tools.build_artist_chain_from_rows(
@@ -936,7 +997,7 @@ class ChainBuilderTest(unittest.TestCase):
         lines = chain.splitlines()
 
         self.assertEqual(len(lines), 4)
-        self.assertEqual(lines[0], "::@a::1.2@0-6%0.00-0.33")
+        self.assertEqual(lines[0], "1.2::@a@0-6%0.00-0.33::")
         self.assertEqual(lines[-1], "d@21-27%0.67-1.00")
         self.assertIn("artists: 4", report)
 

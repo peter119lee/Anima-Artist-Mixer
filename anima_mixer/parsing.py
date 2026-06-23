@@ -10,7 +10,7 @@ Chain syntax overview (all parts optional, composable):
     wlop@0-8                      layer route: inject only into DiT blocks 0-8
     wlop%0.0-0.45                 timing route: active only for sampling progress 0.0-0.45
     wlop%0.0-0.45~0.1             timing route with smoothstep fade width 0.1
-    ::wlop::1.2@0-8%0.0-0.45~0.1  everything combined
+    1.2::wlop@0-8%0.0-0.45~0.1::  everything combined
 """
 
 from .constants import WEIGHT_MAX, WEIGHT_MIN
@@ -18,6 +18,20 @@ from .constants import WEIGHT_MAX, WEIGHT_MIN
 
 def clamp_float(value, lo, hi):
     return max(lo, min(hi, float(value)))
+
+
+def strip_prefix_weight_boundary(text):
+    s = str(text or "").strip()
+    if not s.endswith("::") or "::" not in s[:-2]:
+        return s
+    head, _, tail = s[:-2].partition("::")
+    if not tail.strip():
+        return s
+    try:
+        float(head.strip())
+    except ValueError:
+        return s
+    return s[:-2].strip()
 
 
 def _is_timing_suffix_text(text):
@@ -180,7 +194,7 @@ def parse_artist_layer_route(name):
     Only the final ``@`` is considered, so artist tags that legitimately
     start with ``@`` (e.g. ``@wlop``) survive untouched.
     """
-    s = str(name or "").strip()
+    s = strip_prefix_weight_boundary(name)
     if not s or "@" not in s:
         return s, ""
     base, route = s.rsplit("@", 1)
@@ -211,7 +225,7 @@ def parse_artist_timing_route(name):
     Like layer routes, only the final ``%`` is considered; invalid suffixes
     are kept as plain artist text.
     """
-    s = str(name or "").strip()
+    s = strip_prefix_weight_boundary(name)
     if not s or "%" not in s:
         return s, ""
     base, timing = s.rsplit("%", 1)

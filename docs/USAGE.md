@@ -797,6 +797,15 @@ krenz%0.45-0.85
 hiten%0.75-1.0
 ```
 
+Do not use `@` for sampling timing. `@0.0-0.5` is a normalized layer range and stays active for all sampling steps on that layer range. `%0.0-0.5` is the first half of sampling progress.
+
+With prefix weights, put the timing route inside the weighted target:
+
+```
+1.0::@artist1%0.0-0.5::
+1.0::@artist2%0.5-1.0::
+```
+
 Layer routing and timing can be combined. Put layer routing first, timing last:
 
 ```

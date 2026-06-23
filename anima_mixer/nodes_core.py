@@ -105,6 +105,7 @@ class AnimaArtistPack:
                         "::weight stacks with parentheses: ::(wlop:1.1)::0.8\n"
                         "Optional per-artist layer route: wlop@0-8, krenz@33%-67%\n"
                         "Optional per-artist timing: wlop@0-8%0.0-0.45\n"
+                        "Use % for sampling timing; @0.0-0.5 is a layer range.\n"
                         "Optional timing fade: wlop%0.0-0.45~0.1 (smoothstep edges)\n"
                         "\n"
                         "When any artist uses ::weight, normalize_weights is\n"

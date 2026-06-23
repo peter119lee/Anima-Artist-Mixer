@@ -10,6 +10,7 @@ from .constants import (
 )
 from .options import format_bool
 from .parsing import (
+    _is_layer_route_segment,
     clamp_float,
     parse_artist_layer_routes,
     parse_artist_timing_routes,
@@ -89,7 +90,16 @@ def format_weighted_artist_name(name, weight):
     weight = clamp_float(weight, WEIGHT_MIN, WEIGHT_MAX)
     if abs(weight - 1.0) <= 1e-6:
         return name
-    return f"::{name}::{weight:.3g}"
+    return f"{weight:.3g}::{name}::"
+
+
+def format_weighted_artist_entry(name, weight, layer_route, timing_route):
+    target = str(name or "").strip()
+    if layer_route:
+        target = f"{target}@{layer_route}"
+    if timing_route:
+        target = f"{target}%{timing_route}"
+    return format_weighted_artist_name(target, weight)
 
 
 def _format_route_float(value):
@@ -193,11 +203,7 @@ def build_artist_chain_from_rows(layout, rows, num_blocks=28, extra_warnings=Non
         if timing_route and parse_timing_filter(timing_route) is None:
             warnings.append(f"invalid timing route ignored for {name}: {timing_route}")
             timing_route = ""
-        entry = format_weighted_artist_name(name, weight)
-        if layer_route:
-            entry = f"{entry}@{layer_route}"
-        if timing_route:
-            entry = f"{entry}%{timing_route}"
+        entry = format_weighted_artist_entry(name, weight, layer_route, timing_route)
         entries.append(entry)
         labels.append(name)
         weights.append(weight)
@@ -248,7 +254,7 @@ def format_artist_chain_preview(artist_chain, num_blocks=28):
     for raw, clean, route in zip(clean_timing_parts, clean_layer_parts, layer_routes):
         if "@" in str(raw) and not route:
             suffix = str(raw).rsplit("@", 1)[-1].strip()
-            if not any(ch.isdigit() or ch in ",，-" for ch in suffix):
+            if not _is_layer_route_segment(suffix):
                 continue
             warnings.append(f"invalid layer route kept as artist text: {raw}")
     if len(names) > MAX_ARTISTS:
@@ -260,11 +266,7 @@ def format_artist_chain_preview(artist_chain, num_blocks=28):
 
     cleaned_entries = []
     for label, weight, layer_route, timing_route in zip(names, weights, layer_routes, timing_routes):
-        entry = format_weighted_artist_name(label, weight)
-        if layer_route:
-            entry = f"{entry}@{layer_route}"
-        if timing_route:
-            entry = f"{entry}%{timing_route}"
+        entry = format_weighted_artist_entry(label, weight, layer_route, timing_route)
         cleaned_entries.append(entry)
     cleaned_chain = "\n".join(cleaned_entries)
     status = "CHECK" if warnings else "OK"

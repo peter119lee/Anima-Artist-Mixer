@@ -111,6 +111,7 @@ wlop, 1.2::sakimichan::, (krenz:0.7), -0.4::pixiv_style::
 - Any valid injection weight automatically disables normalization at runtime so explicit weights stay absolute
 - Per-artist layer routing is supported with `@layers`: `wlop@0-8, krenz@33%-67%, hiten@0.67-1.0`
 - Per-artist sampling timing is supported with `%start-end`: `wlop@0-8%0.0-0.45, krenz@9-18%0.45-0.85`
+- `@0.0-0.5` is a normalized layer range, not sampling timing. Use `%0.0-0.5` for the first half of sampling progress.
 - Timing windows can fade in/out smoothly with `~fade` (v26+): `wlop%0.0-0.45~0.1` ramps the artist's weight with a smoothstep over a 0.1-progress-wide edge instead of switching on/off abruptly
 - Anima artist tags that start with `@` are safe: `@wlop` remains the artist name; only a final numeric suffix like `@0-8`, `@33%-67%`, or `@0.33-0.67` is treated as layer routing
 - When combining weight and routing, put the route inside the weighted target: `1.2::@artist_a@0-8::`, not `1.2::@artist_a::@0-8`
